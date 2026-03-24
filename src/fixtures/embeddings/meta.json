@@ -1,0 +1,8 @@
+{
+  "model": "gemini-embedding-001",
+  "dimensions": 256,
+  "generatedAt": "2026-03-18T14:42:16.783Z",
+  "documentCount": 16,
+  "blockCount": 122,
+  "queryCount": 16
+}

@@ -1,0 +1,98 @@
+[
+  {
+    "id": "recipe-search",
+    "query": "how to make pasta dough at home",
+    "expectedTopPath": "cooking-pasta.md",
+    "expectedTopics": ["flour", "eggs", "knead"]
+  },
+  {
+    "id": "programming-search",
+    "query": "handling errors in asynchronous JavaScript code",
+    "expectedTopPath": "javascript-async.md",
+    "expectedTopics": ["async"]
+  },
+  {
+    "id": "science-search",
+    "query": "how do quantum bits differ from classical bits",
+    "expectedTopPath": "quantum-computing.md",
+    "expectedTopics": ["superposition", "qubits"]
+  },
+  {
+    "id": "environment-search",
+    "query": "what causes global warming and how to reduce emissions",
+    "expectedTopPath": "climate-change.md",
+    "expectedTopics": ["greenhouse", "carbon"]
+  },
+  {
+    "id": "plants-search",
+    "query": "best soil conditions and watering schedule for roses",
+    "expectedTopPath": "gardening-roses.md",
+    "expectedTopics": ["water", "fertiliz"]
+  },
+  {
+    "id": "egypt-search",
+    "query": "how were the pyramids of Giza built and who ordered their construction",
+    "expectedTopPath": "ancient-egypt.md",
+    "expectedTopics": ["pyramid", "pharaoh"]
+  },
+  {
+    "id": "ml-search",
+    "query": "what is the difference between supervised learning and neural networks",
+    "expectedTopPath": "machine-learning.md",
+    "expectedTopics": ["supervised", "neural"]
+  },
+  {
+    "id": "planets-search",
+    "query": "which planets have rings and what are they made of",
+    "expectedTopPath": "solar-system.md",
+    "expectedTopics": ["saturn", "ring"]
+  },
+  {
+    "id": "photo-search",
+    "query": "how does aperture affect depth of field in photography",
+    "expectedTopPath": "photography-basics.md",
+    "expectedTopics": ["aperture", "depth"]
+  },
+  {
+    "id": "chess-search",
+    "query": "what are the best opening moves in chess",
+    "expectedTopPath": "chess-strategy.md",
+    "expectedTopics": ["center", "develop"]
+  },
+  {
+    "id": "nutrition-search",
+    "query": "how much protein do I need daily and where to get it",
+    "expectedTopPath": "nutrition-guide.md",
+    "expectedTopics": ["protein", "muscle"]
+  },
+  {
+    "id": "jazz-search",
+    "query": "who are the most influential bebop jazz musicians",
+    "expectedTopPath": "jazz-music.md",
+    "expectedTopics": ["parker", "bebop"]
+  },
+  {
+    "id": "energy-search",
+    "query": "how do solar panels convert sunlight into electricity",
+    "expectedTopPath": "renewable-energy.md",
+    "expectedTopics": ["photovoltaic", "solar"]
+  },
+  {
+    "id": "dog-search",
+    "query": "how to train a puppy to stop pulling on the leash",
+    "expectedTopPath": "dog-training.md",
+    "expectedTopics": ["leash", "pull"]
+  },
+  {
+    "id": "coffee-search",
+    "query": "what is the ideal water temperature for pour over coffee",
+    "expectedTopPath": "coffee-brewing.md",
+    "expectedTopics": ["temperature", "pour"]
+  },
+  {
+    "id": "building-search",
+    "query": "what are the characteristics of gothic cathedral architecture",
+    "expectedTopPath": "architecture-styles.md",
+    "expectedTopics": ["gothic", "arch"]
+  }
+]
