@@ -100,8 +100,7 @@ export function createMiniSearchIndexer(
         const ftsJson = textEntries.get(`${name}/fts`);
         if (ftsJson) {
           fts = MiniSearchFullTextIndex.deserialize(config.fulltext, ftsJson);
-          const parsed = JSON.parse(ftsJson) as { blockIds: string[] };
-          for (const id of parsed.blockIds) {
+          for (const id of fts.getAllBlockIds()) {
             restoredBlockIds.add(id);
           }
         } else {
