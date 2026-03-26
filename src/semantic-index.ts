@@ -1,6 +1,8 @@
 import type { Index } from "./indexer-index.js";
 import type {
   BlockId,
+  CollectionFilter,
+  CollectionId,
   HybridWeights,
   Metadata,
   SearchResult,
@@ -22,15 +24,22 @@ export class SemanticIndex {
     semanticQuery?: string;
     topK: number;
     weights?: HybridWeights;
+    collections?: CollectionFilter;
   }): Promise<SearchResult[]> {
-    const { query, semanticQuery, topK, weights } = params;
+    const { query, semanticQuery, topK, weights, collections } = params;
     const hasVector = this.index.getVectorIndex() !== null;
 
     if (hasVector) {
       const embedding = await this.embed(semanticQuery ?? query);
-      return this.index.search({ query, embedding, topK, weights });
+      return this.index.search({
+        query,
+        embedding,
+        topK,
+        weights,
+        collections,
+      });
     }
-    return this.index.search({ query, topK, weights });
+    return this.index.search({ query, topK, weights, collections });
   }
 
   async addDocument(params: {
@@ -38,15 +47,23 @@ export class SemanticIndex {
     content: string;
     embeddingContent?: string;
     metadata?: Metadata;
+    collectionId?: CollectionId;
   }): Promise<void> {
-    const { blockId, content, embeddingContent, metadata } = params;
+    const { blockId, content, embeddingContent, metadata, collectionId } =
+      params;
     const hasVector = this.index.getVectorIndex() !== null;
 
     if (hasVector) {
       const embedding = await this.embed(embeddingContent ?? content);
-      return this.index.addDocument({ blockId, content, embedding, metadata });
+      return this.index.addDocument({
+        blockId,
+        content,
+        embedding,
+        metadata,
+        collectionId,
+      });
     }
-    return this.index.addDocument({ blockId, content, metadata });
+    return this.index.addDocument({ blockId, content, metadata, collectionId });
   }
 
   async addDocuments(
@@ -56,12 +73,14 @@ export class SemanticIndex {
           content: string;
           embeddingContent?: string;
           metadata?: Metadata;
+          collectionId?: CollectionId;
         }>
       | AsyncIterable<{
           blockId: BlockId;
           content: string;
           embeddingContent?: string;
           metadata?: Metadata;
+          collectionId?: CollectionId;
         }>,
   ): Promise<void> {
     const hasVector = this.index.getVectorIndex() !== null;
@@ -74,12 +93,14 @@ export class SemanticIndex {
             content: string;
             embeddingContent?: string;
             metadata?: Metadata;
+            collectionId?: CollectionId;
           }>
         | AsyncIterable<{
             blockId: BlockId;
             content: string;
             embeddingContent?: string;
             metadata?: Metadata;
+            collectionId?: CollectionId;
           }>,
     ) {
       for await (const doc of source) {
@@ -90,12 +111,14 @@ export class SemanticIndex {
             content: doc.content,
             embedding,
             metadata: doc.metadata,
+            collectionId: doc.collectionId,
           };
         } else {
           yield {
             blockId: doc.blockId,
             content: doc.content,
             metadata: doc.metadata,
+            collectionId: doc.collectionId,
           };
         }
       }
@@ -104,22 +127,37 @@ export class SemanticIndex {
     return this.index.addDocuments(mapped(this.embed, docs));
   }
 
-  async deleteDocument(blockId: BlockId): Promise<void> {
-    return this.index.deleteDocument(blockId);
+  async deleteDocument(
+    blockId: BlockId,
+    collectionId?: CollectionId,
+  ): Promise<void> {
+    return this.index.deleteDocument(blockId, collectionId);
   }
 
   async deleteDocuments(
     blockIds: Iterable<BlockId> | AsyncIterable<BlockId>,
+    collectionId?: CollectionId,
   ): Promise<void> {
-    return this.index.deleteDocuments(blockIds);
+    return this.index.deleteDocuments(blockIds, collectionId);
   }
 
-  async hasDocument(blockId: BlockId): Promise<boolean> {
-    return this.index.hasDocument(blockId);
+  async deleteCollection(collectionId: CollectionId): Promise<void> {
+    return this.index.deleteCollection(collectionId);
   }
 
-  async getSize(): Promise<number> {
-    return this.index.getSize();
+  async hasDocument(
+    blockId: BlockId,
+    collectionId?: CollectionId,
+  ): Promise<boolean> {
+    return this.index.hasDocument(blockId, collectionId);
+  }
+
+  async getSize(collectionId?: CollectionId): Promise<number> {
+    return this.index.getSize(collectionId);
+  }
+
+  async getCollections(): Promise<CollectionId[]> {
+    return this.index.getCollections();
   }
 
   async close(): Promise<void> {

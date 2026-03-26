@@ -16,10 +16,13 @@ export type { EmbedFn } from "./semantic-index.js";
 export { SemanticIndex } from "./semantic-index.js";
 export type {
   BlockId,
+  CollectionFilter,
+  CollectionId,
   HybridWeights,
   Metadata,
   SearchResult,
 } from "./types.js";
+export { DEFAULT_COLLECTION } from "./types.js";
 export type {
   VectorIndex,
   VectorIndexInfo,
