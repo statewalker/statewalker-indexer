@@ -1,5 +1,7 @@
 import type {
   BlockId,
+  CollectionFilter,
+  CollectionId,
   FullTextIndex,
   HybridWeights,
   Index,
@@ -7,6 +9,7 @@ import type {
   SearchResult,
   VectorIndex,
 } from "@repo/indexer-api";
+import { DEFAULT_COLLECTION } from "@repo/indexer-api";
 import { mergeByRRF, mergeByWeights } from "./hybrid-search.js";
 
 export class MemIndex implements Index {
@@ -14,7 +17,7 @@ export class MemIndex implements Index {
   readonly metadata?: Metadata;
   private readonly fts: FullTextIndex | null;
   private readonly vec: VectorIndex | null;
-  private readonly trackedBlockIds = new Set<BlockId>();
+  private readonly trackedBlockIds = new Map<CollectionId, Set<BlockId>>();
   private closed = false;
 
   constructor(
@@ -35,22 +38,47 @@ export class MemIndex implements Index {
     }
   }
 
+  private trackBlock(blockId: BlockId, collectionId: CollectionId): void {
+    let set = this.trackedBlockIds.get(collectionId);
+    if (!set) {
+      set = new Set();
+      this.trackedBlockIds.set(collectionId, set);
+    }
+    set.add(blockId);
+  }
+
+  private untrackBlock(blockId: BlockId, collectionId?: CollectionId): void {
+    if (collectionId !== undefined) {
+      const set = this.trackedBlockIds.get(collectionId);
+      if (set) {
+        set.delete(blockId);
+        if (set.size === 0) this.trackedBlockIds.delete(collectionId);
+      }
+    } else {
+      for (const [cid, set] of this.trackedBlockIds) {
+        set.delete(blockId);
+        if (set.size === 0) this.trackedBlockIds.delete(cid);
+      }
+    }
+  }
+
   async search(params: {
     query?: string;
     embedding?: Float32Array;
     topK: number;
     weights?: HybridWeights;
+    collections?: CollectionFilter;
   }): Promise<SearchResult[]> {
     this.ensureOpen();
-    const { query, embedding, topK, weights } = params;
+    const { query, embedding, topK, weights, collections } = params;
 
     const ftsAvailable = query !== undefined && this.fts !== null;
     const vecAvailable = embedding !== undefined && this.vec !== null;
 
     if (ftsAvailable && vecAvailable) {
       const [ftsResults, vecResults] = await Promise.all([
-        this.fts.search({ query, topK }),
-        this.vec.search({ embedding, topK }),
+        this.fts.search({ query, topK, collections }),
+        this.vec.search({ embedding, topK, collections }),
       ]);
       if (weights) {
         return mergeByWeights(ftsResults, vecResults, weights, topK);
@@ -59,11 +87,11 @@ export class MemIndex implements Index {
     }
 
     if (ftsAvailable) {
-      return this.fts.search({ query, topK });
+      return this.fts.search({ query, topK, collections });
     }
 
     if (vecAvailable) {
-      return this.vec.search({ embedding, topK });
+      return this.vec.search({ embedding, topK, collections });
     }
 
     return [];
@@ -74,21 +102,28 @@ export class MemIndex implements Index {
     content?: string;
     embedding?: Float32Array;
     metadata?: Metadata;
+    collectionId?: CollectionId;
   }): Promise<void> {
     this.ensureOpen();
-    const { blockId, content, embedding, metadata } = params;
+    const { blockId, content, embedding, metadata, collectionId } = params;
+    const cid = collectionId ?? DEFAULT_COLLECTION;
 
     let added = false;
     if (content !== undefined && this.fts !== null) {
-      await this.fts.addDocument({ blockId, content, metadata });
+      await this.fts.addDocument({
+        blockId,
+        content,
+        metadata,
+        collectionId: cid,
+      });
       added = true;
     }
     if (embedding !== undefined && this.vec !== null) {
-      await this.vec.addDocument({ blockId, embedding });
+      await this.vec.addDocument({ blockId, embedding, collectionId: cid });
       added = true;
     }
     if (added) {
-      this.trackedBlockIds.add(blockId);
+      this.trackBlock(blockId, cid);
     }
   }
 
@@ -99,12 +134,14 @@ export class MemIndex implements Index {
           content?: string;
           embedding?: Float32Array;
           metadata?: Metadata;
+          collectionId?: CollectionId;
         }>
       | AsyncIterable<{
           blockId: BlockId;
           content?: string;
           embedding?: Float32Array;
           metadata?: Metadata;
+          collectionId?: CollectionId;
         }>,
   ): Promise<void> {
     this.ensureOpen();
@@ -113,41 +150,85 @@ export class MemIndex implements Index {
       content?: string;
       embedding?: Float32Array;
       metadata?: Metadata;
+      collectionId?: CollectionId;
     }>) {
       await this.addDocument(doc);
     }
   }
 
-  async deleteDocument(blockId: BlockId): Promise<void> {
+  async deleteDocument(
+    blockId: BlockId,
+    collectionId?: CollectionId,
+  ): Promise<void> {
     this.ensureOpen();
     if (this.fts !== null) {
-      await this.fts.deleteDocument(blockId);
+      await this.fts.deleteDocument(blockId, collectionId);
     }
     if (this.vec !== null) {
-      await this.vec.deleteDocument(blockId);
+      await this.vec.deleteDocument(blockId, collectionId);
     }
-    this.trackedBlockIds.delete(blockId);
+    this.untrackBlock(blockId, collectionId);
   }
 
   async deleteDocuments(
     blockIds: Iterable<BlockId> | AsyncIterable<BlockId>,
+    collectionId?: CollectionId,
   ): Promise<void> {
     this.ensureOpen();
     for await (const blockId of blockIds as AsyncIterable<BlockId>) {
-      await this.deleteDocument(blockId);
+      await this.deleteDocument(blockId, collectionId);
     }
   }
 
-  async hasDocument(blockId: BlockId): Promise<boolean> {
+  async deleteCollection(collectionId: CollectionId): Promise<void> {
     this.ensureOpen();
+    if (this.fts !== null) {
+      await this.fts.deleteCollection(collectionId);
+    }
+    if (this.vec !== null) {
+      await this.vec.deleteCollection(collectionId);
+    }
+    this.trackedBlockIds.delete(collectionId);
+  }
+
+  async hasDocument(
+    blockId: BlockId,
+    collectionId?: CollectionId,
+  ): Promise<boolean> {
+    this.ensureOpen();
+    if (collectionId !== undefined) {
+      if (
+        this.fts !== null &&
+        (await this.fts.hasDocument(blockId, collectionId))
+      )
+        return true;
+      if (
+        this.vec !== null &&
+        (await this.vec.hasDocument(blockId, collectionId))
+      )
+        return true;
+      return false;
+    }
     if (this.fts !== null && (await this.fts.hasDocument(blockId))) return true;
     if (this.vec !== null && (await this.vec.hasDocument(blockId))) return true;
     return false;
   }
 
-  async getSize(): Promise<number> {
+  async getSize(collectionId?: CollectionId): Promise<number> {
     this.ensureOpen();
-    return this.trackedBlockIds.size;
+    if (collectionId !== undefined) {
+      return this.trackedBlockIds.get(collectionId)?.size ?? 0;
+    }
+    let total = 0;
+    for (const set of this.trackedBlockIds.values()) {
+      total += set.size;
+    }
+    return total;
+  }
+
+  async getCollections(): Promise<CollectionId[]> {
+    this.ensureOpen();
+    return [...this.trackedBlockIds.keys()];
   }
 
   getFullTextIndex(): FullTextIndex | null {
@@ -158,9 +239,18 @@ export class MemIndex implements Index {
     return this.vec;
   }
 
-  restoreTrackedBlockIds(blockIds: Iterable<BlockId>): void {
+  restoreTrackedBlockIds(
+    blockIds: Iterable<BlockId>,
+    collectionId?: CollectionId,
+  ): void {
+    const cid = collectionId ?? DEFAULT_COLLECTION;
+    let set = this.trackedBlockIds.get(cid);
+    if (!set) {
+      set = new Set();
+      this.trackedBlockIds.set(cid, set);
+    }
     for (const id of blockIds) {
-      this.trackedBlockIds.add(id);
+      set.add(id);
     }
   }
 

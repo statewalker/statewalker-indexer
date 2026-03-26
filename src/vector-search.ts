@@ -18,7 +18,7 @@ export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
 
 export function bruteForceSearch(
   query: Float32Array,
-  embeddings: Map<BlockId, Float32Array>,
+  embeddings: Iterable<[BlockId, Float32Array]>,
   topK: number,
 ): SearchResult[] {
   const scored: SearchResult[] = [];
