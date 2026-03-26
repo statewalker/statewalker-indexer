@@ -1,6 +1,7 @@
 import type { Indexer, IndexerPersistence } from "@repo/indexer-api";
 import { afterEach, beforeEach, describe } from "vitest";
 import { runBatchOperationsSuite } from "./suites/batch-operations.suite.js";
+import { runCollectionsSuite } from "./suites/collections.suite.js";
 import { runErrorHandlingSuite } from "./suites/error-handling.suite.js";
 import { runFullTextIndexSuite } from "./suites/full-text-index.suite.js";
 import { runIndexSuite } from "./suites/index.suite.js";
@@ -44,6 +45,7 @@ export function runIndexerTestSuite(
     runSemanticIndexSuite(() => indexer);
     runBatchOperationsSuite(() => indexer);
     runLifecycleSuite(() => indexer);
+    runCollectionsSuite(() => indexer);
     runErrorHandlingSuite(() => indexer);
 
     if (factory.createWithPersistence) {
