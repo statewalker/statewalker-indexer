@@ -1,29 +1,42 @@
-import type {
-  BlockId,
-  FullTextIndex,
-  FullTextIndexInfo,
-  Metadata,
-  SearchResult,
+import {
+  type BlockId,
+  type CollectionFilter,
+  type CollectionId,
+  DEFAULT_COLLECTION,
+  type FullTextIndex,
+  type FullTextIndexInfo,
+  type Metadata,
+  type SearchResult,
 } from "@repo/indexer-api";
 import FlexSearch from "flexsearch";
 
+interface CollectionState {
+  flexIndex: FlexSearch.Index;
+  blockIdToNum: Map<string, number>;
+  numToBlockId: Map<number, string>;
+  nextNum: number;
+}
+
+function createCollectionState(): CollectionState {
+  return {
+    flexIndex: new FlexSearch.Index({
+      tokenize: "forward",
+      resolution: 9,
+      cache: true,
+    }),
+    blockIdToNum: new Map(),
+    numToBlockId: new Map(),
+    nextNum: 1,
+  };
+}
+
 export class FlexSearchFullTextIndex implements FullTextIndex {
   private readonly info: FullTextIndexInfo;
-  private readonly flexIndex: FlexSearch.Index;
-  /** Maps string blockId to internal numeric id for FlexSearch */
-  private blockIdToNum = new Map<string, number>();
-  /** Maps internal numeric id back to string blockId */
-  private numToBlockId = new Map<number, string>();
-  private nextNum = 1;
+  private readonly collections = new Map<CollectionId, CollectionState>();
   private closed = false;
 
   constructor(info: FullTextIndexInfo) {
     this.info = info;
-    this.flexIndex = new FlexSearch.Index({
-      tokenize: "forward",
-      resolution: 9,
-      cache: true,
-    });
   }
 
   private ensureOpen(): void {
@@ -32,14 +45,66 @@ export class FlexSearchFullTextIndex implements FullTextIndex {
     }
   }
 
-  private getOrAssignNum(blockId: BlockId): number {
-    let num = this.blockIdToNum.get(blockId);
+  private getOrCreateCollection(collectionId: CollectionId): CollectionState {
+    let state = this.collections.get(collectionId);
+    if (!state) {
+      state = createCollectionState();
+      this.collections.set(collectionId, state);
+    }
+    return state;
+  }
+
+  private resolveCollections(filter?: CollectionFilter): CollectionId[] {
+    if (filter === undefined) {
+      return [...this.collections.keys()];
+    }
+    return Array.isArray(filter) ? filter : [filter];
+  }
+
+  private getOrAssignNum(state: CollectionState, blockId: BlockId): number {
+    let num = state.blockIdToNum.get(blockId);
     if (num === undefined) {
-      num = this.nextNum++;
-      this.blockIdToNum.set(blockId, num);
-      this.numToBlockId.set(num, blockId);
+      num = state.nextNum++;
+      state.blockIdToNum.set(blockId, num);
+      state.numToBlockId.set(num, blockId);
     }
     return num;
+  }
+
+  private searchCollection(
+    state: CollectionState,
+    query: string,
+    topK: number,
+    collectionId: CollectionId,
+    includeCollectionId: boolean,
+  ): SearchResult[] {
+    const ids = state.flexIndex.search(query, topK) as number[];
+
+    if (ids.length === 0) {
+      const words = query.split(/\s+/).filter((w) => w.length > 1);
+      const scores = new Map<number, number>();
+      for (const word of words) {
+        const wordIds = state.flexIndex.search(word, topK) as number[];
+        for (let i = 0; i < wordIds.length; i++) {
+          const numId = wordIds[i]!;
+          scores.set(numId, (scores.get(numId) ?? 0) + 1 - i / wordIds.length);
+        }
+      }
+      const sorted = [...scores.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, topK);
+      return sorted.map(([numId, score]) => ({
+        blockId: state.numToBlockId.get(numId) ?? String(numId),
+        score,
+        ...(includeCollectionId ? { collectionId } : {}),
+      }));
+    }
+
+    return ids.map((numId, rank) => ({
+      blockId: state.numToBlockId.get(numId) ?? String(numId),
+      score: 1 - rank / ids.length,
+      ...(includeCollectionId ? { collectionId } : {}),
+    }));
   }
 
   async getIndexInfo(): Promise<FullTextIndexInfo> {
@@ -50,65 +115,65 @@ export class FlexSearchFullTextIndex implements FullTextIndex {
   async deleteIndex(): Promise<void> {
     this.ensureOpen();
     this.closed = true;
-    this.blockIdToNum.clear();
-    this.numToBlockId.clear();
+    this.collections.clear();
   }
 
   async search(params: {
     query: string;
     topK: number;
+    collections?: CollectionFilter;
   }): Promise<SearchResult[]> {
     this.ensureOpen();
+    const collIds = this.resolveCollections(params.collections);
+    const includeCollectionId = params.collections !== undefined;
+    const allResults: SearchResult[] = [];
 
-    // Try the full query first (AND matching)
-    const ids = this.flexIndex.search(params.query, params.topK) as number[];
-
-    // If no results, search individual words and merge (OR matching)
-    if (ids.length === 0) {
-      const words = params.query.split(/\s+/).filter((w) => w.length > 1);
-      const scores = new Map<number, number>();
-      for (const word of words) {
-        const wordIds = this.flexIndex.search(word, params.topK) as number[];
-        for (let i = 0; i < wordIds.length; i++) {
-          const numId = wordIds[i]!;
-          scores.set(numId, (scores.get(numId) ?? 0) + 1 - i / wordIds.length);
-        }
-      }
-      const sorted = [...scores.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, params.topK);
-      return sorted.map(([numId, score]) => ({
-        blockId: this.numToBlockId.get(numId) ?? String(numId),
-        score,
-      }));
+    for (const cid of collIds) {
+      const state = this.collections.get(cid);
+      if (!state) continue;
+      const results = this.searchCollection(
+        state,
+        params.query,
+        params.topK,
+        cid,
+        includeCollectionId,
+      );
+      allResults.push(...results);
     }
 
-    return ids.map((numId, rank) => ({
-      blockId: this.numToBlockId.get(numId) ?? String(numId),
-      score: 1 - rank / ids.length,
-    }));
+    allResults.sort((a, b) => b.score - a.score);
+    return allResults.slice(0, params.topK);
   }
 
   async addDocument(params: {
     blockId: BlockId;
     content: string;
     metadata?: Metadata;
+    collectionId?: CollectionId;
   }): Promise<void> {
     this.ensureOpen();
-    const num = this.getOrAssignNum(params.blockId);
-    if (this.blockIdToNum.has(params.blockId)) {
-      this.flexIndex.remove(num);
+    const cid = params.collectionId ?? DEFAULT_COLLECTION;
+    const state = this.getOrCreateCollection(cid);
+    const num = this.getOrAssignNum(state, params.blockId);
+    if (state.blockIdToNum.has(params.blockId)) {
+      state.flexIndex.remove(num);
     }
-    this.flexIndex.add(num, params.content);
+    state.flexIndex.add(num, params.content);
   }
 
   async addDocuments(
     docs:
-      | Iterable<{ blockId: BlockId; content: string; metadata?: Metadata }>
+      | Iterable<{
+          blockId: BlockId;
+          content: string;
+          metadata?: Metadata;
+          collectionId?: CollectionId;
+        }>
       | AsyncIterable<{
           blockId: BlockId;
           content: string;
           metadata?: Metadata;
+          collectionId?: CollectionId;
         }>,
   ): Promise<void> {
     this.ensureOpen();
@@ -116,99 +181,205 @@ export class FlexSearchFullTextIndex implements FullTextIndex {
       blockId: BlockId;
       content: string;
       metadata?: Metadata;
+      collectionId?: CollectionId;
     }>) {
       await this.addDocument(doc);
     }
   }
 
-  async deleteDocument(blockId: BlockId): Promise<void> {
+  async deleteDocument(
+    blockId: BlockId,
+    collectionId?: CollectionId,
+  ): Promise<void> {
     this.ensureOpen();
-    const num = this.blockIdToNum.get(blockId);
+    if (collectionId !== undefined) {
+      this.removeFromCollection(blockId, collectionId);
+    } else {
+      for (const cid of this.collections.keys()) {
+        this.removeFromCollection(blockId, cid);
+      }
+    }
+  }
+
+  private removeFromCollection(
+    blockId: BlockId,
+    collectionId: CollectionId,
+  ): void {
+    const state = this.collections.get(collectionId);
+    if (!state) return;
+    const num = state.blockIdToNum.get(blockId);
     if (num !== undefined) {
-      this.flexIndex.remove(num);
-      this.blockIdToNum.delete(blockId);
-      this.numToBlockId.delete(num);
+      state.flexIndex.remove(num);
+      state.blockIdToNum.delete(blockId);
+      state.numToBlockId.delete(num);
+      if (state.blockIdToNum.size === 0) {
+        this.collections.delete(collectionId);
+      }
     }
   }
 
   async deleteDocuments(
     blockIds: Iterable<BlockId> | AsyncIterable<BlockId>,
+    collectionId?: CollectionId,
   ): Promise<void> {
     this.ensureOpen();
     for await (const blockId of blockIds as AsyncIterable<BlockId>) {
-      await this.deleteDocument(blockId);
+      await this.deleteDocument(blockId, collectionId);
     }
   }
 
-  async hasDocument(blockId: BlockId): Promise<boolean> {
+  async deleteCollection(collectionId: CollectionId): Promise<void> {
     this.ensureOpen();
-    return this.blockIdToNum.has(blockId);
+    this.collections.delete(collectionId);
   }
 
-  async getSize(): Promise<number> {
+  async hasDocument(
+    blockId: BlockId,
+    collectionId?: CollectionId,
+  ): Promise<boolean> {
     this.ensureOpen();
-    return this.blockIdToNum.size;
+    if (collectionId !== undefined) {
+      return (
+        this.collections.get(collectionId)?.blockIdToNum.has(blockId) ?? false
+      );
+    }
+    for (const state of this.collections.values()) {
+      if (state.blockIdToNum.has(blockId)) return true;
+    }
+    return false;
+  }
+
+  async getSize(collectionId?: CollectionId): Promise<number> {
+    this.ensureOpen();
+    if (collectionId !== undefined) {
+      return this.collections.get(collectionId)?.blockIdToNum.size ?? 0;
+    }
+    let total = 0;
+    for (const state of this.collections.values()) {
+      total += state.blockIdToNum.size;
+    }
+    return total;
+  }
+
+  async getCollections(): Promise<CollectionId[]> {
+    this.ensureOpen();
+    return [...this.collections.keys()];
   }
 
   async close(): Promise<void> {
     this.closed = true;
   }
 
-  /** Export FlexSearch native chunks as key/value pairs */
+  /** Export FlexSearch native chunks as key/value pairs per collection */
   async exportChunks(): Promise<Map<string, string>> {
     const chunks = new Map<string, string>();
-    await this.flexIndex.export((key: string | number, data: string) => {
-      chunks.set(String(key), data);
-    });
+    for (const [cid, state] of this.collections) {
+      const collChunks = new Map<string, string>();
+      await state.flexIndex.export((key: string | number, data: string) => {
+        collChunks.set(String(key), data);
+      });
+      chunks.set(
+        `coll:${cid}`,
+        JSON.stringify({
+          chunks: Object.fromEntries(collChunks),
+          blockIds: [...state.blockIdToNum.entries()],
+          nextNum: state.nextNum,
+        }),
+      );
+    }
     return chunks;
   }
 
-  /** Serialize to JSON string using native FlexSearch export */
+  /** Serialize to JSON string */
   async serialize(): Promise<string> {
-    const chunks = await this.exportChunks();
-    const mapping = [...this.blockIdToNum.entries()];
-    return JSON.stringify({
-      chunks: Object.fromEntries(chunks),
-      blockIds: mapping,
-      nextNum: this.nextNum,
-    });
+    const collectionsData: Record<
+      string,
+      {
+        chunks: Record<string, string>;
+        blockIds: Array<[string, number]>;
+        nextNum: number;
+      }
+    > = {};
+
+    for (const [cid, state] of this.collections) {
+      const chunks = new Map<string, string>();
+      await state.flexIndex.export((key: string | number, data: string) => {
+        chunks.set(String(key), data);
+      });
+      collectionsData[cid] = {
+        chunks: Object.fromEntries(chunks),
+        blockIds: [...state.blockIdToNum.entries()],
+        nextNum: state.nextNum,
+      };
+    }
+
+    return JSON.stringify({ version: 2, collections: collectionsData });
   }
 
-  /** Import FlexSearch native chunks and restore blockId mapping */
-  static importChunks(
-    info: FullTextIndexInfo,
-    chunks: Map<string, string>,
-    blockIdMapping: Array<[string, number]>,
-    nextNum: number,
-  ): FlexSearchFullTextIndex {
-    const fts = new FlexSearchFullTextIndex(info);
-    for (const [key, data] of chunks) {
-      fts.flexIndex.import(key, data);
-    }
-    for (const [blockId, num] of blockIdMapping) {
-      fts.blockIdToNum.set(blockId, num);
-      fts.numToBlockId.set(num, blockId);
-    }
-    fts.nextNum = nextNum;
-    return fts;
-  }
-
-  /** Deserialize from JSON string produced by serialize() */
+  /** Import from serialized data — handles both legacy (v1) and new (v2) format */
   static deserialize(
     info: FullTextIndexInfo,
     json: string,
   ): FlexSearchFullTextIndex {
     const parsed = JSON.parse(json) as {
-      chunks: Record<string, string>;
-      blockIds: Array<[string, number]>;
-      nextNum: number;
+      version?: number;
+      // v2 format
+      collections?: Record<
+        string,
+        {
+          chunks: Record<string, string>;
+          blockIds: Array<[string, number]>;
+          nextNum: number;
+        }
+      >;
+      // v1 (legacy) format
+      chunks?: Record<string, string>;
+      blockIds?: Array<[string, number]>;
+      nextNum?: number;
     };
-    const chunks = new Map(Object.entries(parsed.chunks));
-    return FlexSearchFullTextIndex.importChunks(
-      info,
-      chunks,
-      parsed.blockIds,
-      parsed.nextNum,
-    );
+
+    const fts = new FlexSearchFullTextIndex(info);
+
+    if (parsed.version === 2 && parsed.collections) {
+      for (const [cid, collData] of Object.entries(parsed.collections)) {
+        const state = createCollectionState();
+        const chunks = new Map(Object.entries(collData.chunks));
+        for (const [key, data] of chunks) {
+          state.flexIndex.import(key, data);
+        }
+        for (const [blockId, num] of collData.blockIds) {
+          state.blockIdToNum.set(blockId, num);
+          state.numToBlockId.set(num, blockId);
+        }
+        state.nextNum = collData.nextNum;
+        fts.collections.set(cid, state);
+      }
+    } else if (parsed.chunks && parsed.blockIds && parsed.nextNum) {
+      // Legacy v1 format — put everything in _default collection
+      const state = createCollectionState();
+      const chunks = new Map(Object.entries(parsed.chunks));
+      for (const [key, data] of chunks) {
+        state.flexIndex.import(key, data);
+      }
+      for (const [blockId, num] of parsed.blockIds) {
+        state.blockIdToNum.set(blockId, num);
+        state.numToBlockId.set(num, blockId);
+      }
+      state.nextNum = parsed.nextNum;
+      fts.collections.set(DEFAULT_COLLECTION, state);
+    }
+
+    return fts;
+  }
+
+  /** Get all block IDs across all collections (for persistence restore) */
+  getAllBlockIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const state of this.collections.values()) {
+      for (const blockId of state.blockIdToNum.keys()) {
+        ids.add(blockId);
+      }
+    }
+    return ids;
   }
 }

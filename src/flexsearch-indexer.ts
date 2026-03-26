@@ -100,11 +100,8 @@ export function createFlexSearchIndexer(
         const ftsJson = textEntries.get(`${name}/fts`);
         if (ftsJson) {
           fts = FlexSearchFullTextIndex.deserialize(config.fulltext, ftsJson);
-          const parsed = JSON.parse(ftsJson) as {
-            blockIds: Array<[string, number]>;
-          };
-          for (const [blockId] of parsed.blockIds) {
-            restoredBlockIds.add(blockId);
+          for (const id of fts.getAllBlockIds()) {
+            restoredBlockIds.add(id);
           }
         } else {
           fts = new FlexSearchFullTextIndex(config.fulltext);
