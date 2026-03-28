@@ -1,6 +1,7 @@
 import type { Db } from "@repo/db";
 import {
   type BlockId,
+  buildCollectionClause,
   type CollectionFilter,
   type CollectionId,
   DEFAULT_COLLECTION,
@@ -34,11 +35,6 @@ export class DuckDbFullTextIndex implements FullTextIndex {
     }
   }
 
-  private resolveCollections(filter?: CollectionFilter): CollectionId[] | null {
-    if (filter === undefined) return null;
-    return Array.isArray(filter) ? filter : [filter];
-  }
-
   async getIndexInfo(): Promise<FullTextIndexInfo> {
     this.ensureOpen();
     return { ...this.info };
@@ -64,7 +60,6 @@ export class DuckDbFullTextIndex implements FullTextIndex {
 
     if (words.length === 0) return [];
 
-    const colls = this.resolveCollections(params.collections);
     const likeParams = words.map((w) => `%${w}%`);
 
     const conditions = words.map((_, i) => `LOWER(content) LIKE $${i + 1}`);
@@ -75,12 +70,15 @@ export class DuckDbFullTextIndex implements FullTextIndex {
       .join(" + ");
 
     let collClause = "";
-    const allParams: (string | number)[] = [...likeParams];
+    const allParams: (string | number | string[])[] = [...likeParams];
 
-    if (colls) {
-      const placeholders = colls.map((_, i) => `$${words.length + i + 1}`);
-      collClause = ` AND collection_id IN (${placeholders.join(", ")})`;
-      allParams.push(...colls);
+    const collFilter = buildCollectionClause(
+      params.collections,
+      words.length + 1,
+    );
+    if (collFilter) {
+      collClause = ` AND ${collFilter.sql}`;
+      allParams.push(...collFilter.params);
     }
 
     const topKParam = `$${allParams.length + 1}`;

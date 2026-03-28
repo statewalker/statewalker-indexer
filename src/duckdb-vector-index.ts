@@ -1,6 +1,7 @@
 import type { Db } from "@repo/db";
 import {
   type BlockId,
+  buildCollectionClause,
   type CollectionFilter,
   type CollectionId,
   DEFAULT_COLLECTION,
@@ -51,11 +52,6 @@ export class DuckDbVectorIndex implements VectorIndex {
     return `[${Array.from(embedding).join(",")}]`;
   }
 
-  private resolveCollections(filter?: CollectionFilter): CollectionId[] | null {
-    if (filter === undefined) return null;
-    return Array.isArray(filter) ? filter : [filter];
-  }
-
   async getIndexInfo(): Promise<VectorIndexInfo> {
     this.ensureOpen();
     return { ...this.info };
@@ -77,15 +73,14 @@ export class DuckDbVectorIndex implements VectorIndex {
 
     const dim = this.info.dimensionality;
     const vecLiteral = this.embeddingToSql(params.embedding);
-    const colls = this.resolveCollections(params.collections);
 
     let collClause = "";
-    const queryParams: (string | number)[] = [vecLiteral];
+    const queryParams: (string | number | string[])[] = [vecLiteral];
 
-    if (colls) {
-      const placeholders = colls.map((_, i) => `$${i + 2}`);
-      collClause = `WHERE collection_id IN (${placeholders.join(", ")}) `;
-      queryParams.push(...colls);
+    const collFilter = buildCollectionClause(params.collections, 2);
+    if (collFilter) {
+      collClause = `WHERE ${collFilter.sql} `;
+      queryParams.push(...collFilter.params);
     }
 
     const topKParam = `$${queryParams.length + 1}`;
