@@ -1,3 +1,8 @@
+export {
+  isCollectionPrefix,
+  matchesCollection,
+  resolveCollections,
+} from "./collection-filter.js";
 export type {
   FullTextIndex,
   FullTextIndexInfo,
@@ -12,6 +17,8 @@ export type {
   IndexerPersistence,
   PersistenceEntry,
 } from "./persistence.js";
+export type { BlendTier } from "./reranker-blend.js";
+export { blendWithReranker, DEFAULT_BLEND_TIERS } from "./reranker-blend.js";
 export type { EmbedFn } from "./semantic-index.js";
 export { SemanticIndex } from "./semantic-index.js";
 export type {
