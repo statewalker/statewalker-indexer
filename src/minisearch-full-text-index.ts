@@ -1,10 +1,12 @@
 import {
+  resolveCollections as apiResolveCollections,
   type BlockId,
   type CollectionFilter,
   type CollectionId,
   DEFAULT_COLLECTION,
   type FullTextIndex,
   type FullTextIndexInfo,
+  isCollectionPrefix,
   type Metadata,
   type SearchResult,
 } from "@repo/indexer-api";
@@ -53,7 +55,11 @@ export class MiniSearchFullTextIndex implements FullTextIndex {
     if (filter === undefined) {
       return [...this.collections.keys()];
     }
-    return Array.isArray(filter) ? filter : [filter];
+    const filters = Array.isArray(filter) ? filter : [filter];
+    if (filters.some(isCollectionPrefix)) {
+      return apiResolveCollections(filter, [...this.collections.keys()]);
+    }
+    return filters;
   }
 
   private searchCollection(
