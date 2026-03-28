@@ -7,7 +7,9 @@ import { runFullTextIndexSuite } from "./suites/full-text-index.suite.js";
 import { runIndexSuite } from "./suites/index.suite.js";
 import { runIndexerSuite } from "./suites/indexer.suite.js";
 import { runLifecycleSuite } from "./suites/lifecycle.suite.js";
+import { runMultiIndexerIsolationSuite } from "./suites/multi-indexer-isolation.suite.js";
 import { runPersistenceSuite } from "./suites/persistence.suite.js";
+import { runSearchQualitySuite } from "./suites/search-quality.suite.js";
 import { runSemanticIndexSuite } from "./suites/semantic-index.suite.js";
 import { runVectorIndexSuite } from "./suites/vector-index.suite.js";
 
@@ -47,6 +49,9 @@ export function runIndexerTestSuite(
     runLifecycleSuite(() => indexer);
     runCollectionsSuite(() => indexer);
     runErrorHandlingSuite(() => indexer);
+
+    runSearchQualitySuite(() => indexer);
+    runMultiIndexerIsolationSuite(factory.create);
 
     if (factory.createWithPersistence) {
       runPersistenceSuite(factory);
