@@ -1,6 +1,7 @@
 import type { PGlite } from "@electric-sql/pglite";
 import {
   type BlockId,
+  buildCollectionClause,
   type CollectionFilter,
   type CollectionId,
   DEFAULT_COLLECTION,
@@ -69,11 +70,6 @@ export class PGLiteFullTextIndex implements FullTextIndex {
     }
   }
 
-  private resolveCollections(filter?: CollectionFilter): CollectionId[] | null {
-    if (filter === undefined) return null;
-    return Array.isArray(filter) ? filter : [filter];
-  }
-
   async getIndexInfo(): Promise<FullTextIndexInfo> {
     this.ensureOpen();
     return { ...this.info };
@@ -103,14 +99,14 @@ export class PGLiteFullTextIndex implements FullTextIndex {
     if (validWords.length === 0) return [];
 
     const orTerms = validWords.join(" | ");
-    const colls = this.resolveCollections(params.collections);
 
     let collClause = "";
     const queryParams: (string | number | string[])[] = [orTerms];
 
-    if (colls) {
-      collClause = ` AND collection_id = ANY($3::text[])`;
-      queryParams.push(params.topK, colls);
+    const collFilter = buildCollectionClause(params.collections, 3);
+    if (collFilter) {
+      collClause = ` AND ${collFilter.sql}`;
+      queryParams.push(params.topK, ...collFilter.params);
     } else {
       queryParams.push(params.topK);
     }

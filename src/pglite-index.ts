@@ -6,10 +6,12 @@ import type {
   HybridWeights,
   Index,
   Metadata,
+  MultiSearchParams,
+  MultiSearchResult,
   SearchResult,
   VectorIndex,
 } from "@repo/indexer-api";
-import { DEFAULT_COLLECTION } from "@repo/indexer-api";
+import { DEFAULT_COLLECTION, defaultMultiSearch } from "@repo/indexer-api";
 import { mergeByRRF, mergeByWeights } from "./hybrid-search.js";
 
 export class PGLiteIndex implements Index {
@@ -237,6 +239,11 @@ export class PGLiteIndex implements Index {
 
   getVectorIndex(): VectorIndex | null {
     return this.vec;
+  }
+
+  async multiSearch(params: MultiSearchParams): Promise<MultiSearchResult> {
+    this.ensureOpen();
+    return defaultMultiSearch(this, params);
   }
 
   async close(): Promise<void> {

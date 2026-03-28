@@ -1,6 +1,7 @@
 import type { PGlite } from "@electric-sql/pglite";
 import {
   type BlockId,
+  buildCollectionClause,
   type CollectionFilter,
   type CollectionId,
   DEFAULT_COLLECTION,
@@ -55,11 +56,6 @@ export class PGLiteVectorIndex implements VectorIndex {
     return `[${Array.from(embedding).join(",")}]`;
   }
 
-  private resolveCollections(filter?: CollectionFilter): CollectionId[] | null {
-    if (filter === undefined) return null;
-    return Array.isArray(filter) ? filter : [filter];
-  }
-
   async getIndexInfo(): Promise<VectorIndexInfo> {
     this.ensureOpen();
     return { ...this.info };
@@ -80,14 +76,14 @@ export class PGLiteVectorIndex implements VectorIndex {
     this.validateDimensionality(params.embedding);
 
     const vecLiteral = this.embeddingToSql(params.embedding);
-    const colls = this.resolveCollections(params.collections);
 
     let collClause = "";
     const queryParams: (string | number | string[])[] = [vecLiteral];
 
-    if (colls) {
-      collClause = `WHERE collection_id = ANY($3::text[]) `;
-      queryParams.push(params.topK, colls);
+    const collFilter = buildCollectionClause(params.collections, 3);
+    if (collFilter) {
+      collClause = `WHERE ${collFilter.sql} `;
+      queryParams.push(params.topK, ...collFilter.params);
     } else {
       queryParams.push(params.topK);
     }

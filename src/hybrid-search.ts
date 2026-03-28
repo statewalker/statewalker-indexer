@@ -7,21 +7,33 @@ export function mergeByRRF(
   k = 60,
 ): SearchResult[] {
   const scores = new Map<string, number>();
+  const collectionIds = new Map<string, string>();
 
   for (let i = 0; i < ftsResults.length; i++) {
     const r = ftsResults[i];
     if (!r) continue;
     scores.set(r.blockId, (scores.get(r.blockId) ?? 0) + 1 / (k + i + 1));
+    if (r.collectionId && !collectionIds.has(r.blockId)) {
+      collectionIds.set(r.blockId, r.collectionId);
+    }
   }
   for (let i = 0; i < vectorResults.length; i++) {
     const r = vectorResults[i];
     if (!r) continue;
     scores.set(r.blockId, (scores.get(r.blockId) ?? 0) + 1 / (k + i + 1));
+    if (r.collectionId && !collectionIds.has(r.blockId)) {
+      collectionIds.set(r.blockId, r.collectionId);
+    }
   }
 
   const results: SearchResult[] = [];
   for (const [blockId, score] of scores) {
-    results.push({ blockId, score });
+    const collectionId = collectionIds.get(blockId);
+    results.push({
+      blockId,
+      score,
+      ...(collectionId ? { collectionId } : {}),
+    });
   }
   results.sort((a, b) => b.score - a.score);
   return results.slice(0, topK);
@@ -54,14 +66,30 @@ export function mergeByWeights(
   const vecNorm = normalize(vectorResults);
 
   const allBlockIds = new Set<string>();
-  for (const id of ftsNorm.keys()) allBlockIds.add(id);
-  for (const id of vecNorm.keys()) allBlockIds.add(id);
+  const collectionIds = new Map<string, string>();
+  for (const r of ftsResults) {
+    allBlockIds.add(r.blockId);
+    if (r.collectionId && !collectionIds.has(r.blockId)) {
+      collectionIds.set(r.blockId, r.collectionId);
+    }
+  }
+  for (const r of vectorResults) {
+    allBlockIds.add(r.blockId);
+    if (r.collectionId && !collectionIds.has(r.blockId)) {
+      collectionIds.set(r.blockId, r.collectionId);
+    }
+  }
 
   const results: SearchResult[] = [];
   for (const blockId of allBlockIds) {
     const ftsScore = (ftsNorm.get(blockId) ?? 0) * weights.fts;
     const vecScore = (vecNorm.get(blockId) ?? 0) * weights.embedding;
-    results.push({ blockId, score: ftsScore + vecScore });
+    const collectionId = collectionIds.get(blockId);
+    results.push({
+      blockId,
+      score: ftsScore + vecScore,
+      ...(collectionId ? { collectionId } : {}),
+    });
   }
   results.sort((a, b) => b.score - a.score);
   return results.slice(0, topK);
