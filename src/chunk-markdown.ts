@@ -1,3 +1,11 @@
+/**
+ * Smart markdown chunking with quadratic distance decay.
+ *
+ * Adapted from QMD (https://github.com/tobi/qmd) by Tobi Lutke.
+ * MIT License — Copyright (c) 2024-2026 Tobi Lutke.
+ * See: src/store.ts (findBestCutoff, chunkDocument)
+ */
+
 import { scanBreakPoints } from "./break-points.js";
 import { findCodeFences, isInsideCodeFence } from "./code-fences.js";
 import type { BreakPoint, Chunk, ChunkOptions, CodeFence } from "./types.js";

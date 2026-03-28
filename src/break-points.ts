@@ -1,3 +1,11 @@
+/**
+ * Markdown break-point detection with weighted scoring.
+ *
+ * Adapted from QMD (https://github.com/tobi/qmd) by Tobi Lutke.
+ * MIT License — Copyright (c) 2024-2026 Tobi Lutke.
+ * See: src/store.ts (scanBreakPoints)
+ */
+
 import type { BreakPoint } from "./types.js";
 
 const HEADING_PATTERNS: Array<{ prefix: string; score: number }> = [
