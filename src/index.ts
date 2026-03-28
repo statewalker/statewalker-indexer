@@ -1,4 +1,5 @@
 export {
+  buildCollectionClause,
   isCollectionPrefix,
   matchesCollection,
   resolveCollections,
@@ -15,6 +16,7 @@ export type {
 export type { Index } from "./indexer-index.js";
 export type { ChunkSelection } from "./intent.js";
 export { extractIntentTerms, selectBestChunk } from "./intent.js";
+export { defaultMultiSearch } from "./multi-search.js";
 export type {
   IndexerPersistence,
   PersistenceEntry,
@@ -35,8 +37,12 @@ export type {
   BlockId,
   CollectionFilter,
   CollectionId,
+  GroupedSearchResult,
   HybridWeights,
   Metadata,
+  MultiSearchParams,
+  MultiSearchResult,
+  ScoredResult,
   SearchResult,
 } from "./types.js";
 export { DEFAULT_COLLECTION } from "./types.js";

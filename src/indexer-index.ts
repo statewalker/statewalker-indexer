@@ -5,6 +5,8 @@ import type {
   CollectionId,
   HybridWeights,
   Metadata,
+  MultiSearchParams,
+  MultiSearchResult,
   SearchResult,
 } from "./types.js";
 import type { VectorIndex } from "./vector-index.js";
@@ -20,6 +22,8 @@ export interface Index {
     weights?: HybridWeights;
     collections?: CollectionFilter;
   }): Promise<SearchResult[]>;
+
+  multiSearch?(params: MultiSearchParams): Promise<MultiSearchResult>;
 
   addDocument(params: {
     blockId: BlockId;

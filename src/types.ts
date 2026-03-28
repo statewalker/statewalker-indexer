@@ -25,3 +25,34 @@ export interface HybridWeights {
   fts: number;
   embedding: number;
 }
+
+/** Parameters for multi-query search */
+export interface MultiSearchParams {
+  /** Collection filters (exact IDs or prefixes ending with "/") */
+  collections?: CollectionFilter;
+  /** Multiple FTS queries ��� results matching more queries rank higher */
+  queries?: string[];
+  /** Multiple embedding vectors — same boosting logic */
+  embeddings?: Float32Array[];
+  /** Number of results to return (total if ungrouped, per group if grouped) */
+  topK: number;
+  /** Hybrid weights (FTS vs embedding) */
+  weights?: HybridWeights;
+  /** Group results by collection in output */
+  groupByCollection?: boolean;
+}
+
+/** A search result with cross-query match count */
+export interface ScoredResult extends SearchResult {
+  /** How many of the input queries matched this document */
+  matchCount: number;
+}
+
+/** Results grouped by collection */
+export interface GroupedSearchResult {
+  collectionId: CollectionId;
+  results: ScoredResult[];
+}
+
+/** MultiSearch returns either flat scored results or grouped results */
+export type MultiSearchResult = ScoredResult[] | GroupedSearchResult[];
