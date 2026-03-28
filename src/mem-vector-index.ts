@@ -1,8 +1,10 @@
 import {
+  resolveCollections as apiResolveCollections,
   type BlockId,
   type CollectionFilter,
   type CollectionId,
   DEFAULT_COLLECTION,
+  isCollectionPrefix,
   type SearchResult,
   type VectorIndex,
   type VectorIndexInfo,
@@ -56,7 +58,11 @@ export class MemVectorIndex implements VectorIndex {
     if (filter === undefined) {
       return [...this.collections.keys()];
     }
-    return Array.isArray(filter) ? filter : [filter];
+    const filters = Array.isArray(filter) ? filter : [filter];
+    if (filters.some(isCollectionPrefix)) {
+      return apiResolveCollections(filter, [...this.collections.keys()]);
+    }
+    return filters;
   }
 
   private *iterateEntries(
