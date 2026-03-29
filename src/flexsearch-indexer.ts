@@ -94,15 +94,11 @@ export function createFlexSearchIndexer(
 
       let fts: FlexSearchFullTextIndex | null = null;
       let vec: MemVectorIndex | null = null;
-      const restoredBlockIds = new Set<string>();
 
       if (config.fulltext) {
         const ftsJson = textEntries.get(`${name}/fts`);
         if (ftsJson) {
           fts = FlexSearchFullTextIndex.deserialize(config.fulltext, ftsJson);
-          for (const id of fts.getAllBlockIds()) {
-            restoredBlockIds.add(id);
-          }
         } else {
           fts = new FlexSearchFullTextIndex(config.fulltext);
         }
@@ -112,16 +108,32 @@ export function createFlexSearchIndexer(
         const vecBytes = binaryEntries.get(`${name}/vec`);
         if (vecBytes) {
           vec = MemVectorIndex.deserializeFromArrow(config.vector, vecBytes);
-          for (const id of vec.getBlockIds()) {
-            restoredBlockIds.add(id);
-          }
         } else {
           vec = new MemVectorIndex(config.vector);
         }
       }
 
       const index = new MemIndex(name, fts, vec);
-      index.restoreTrackedBlockIds(restoredBlockIds);
+
+      // Restore block tracking by iterating sub-indexes.
+      // addDocument with no content/embedding just populates the tracking map
+      // without re-adding to sub-indexes.
+      const seen = new Set<string>();
+      if (fts) {
+        for await (const ref of fts.getDocumentBlocksRefs()) {
+          seen.add(`${ref.path}\0${ref.blockId}`);
+          await index.addDocument([{ path: ref.path, blockId: ref.blockId }]);
+        }
+      }
+      if (vec) {
+        for await (const ref of vec.getDocumentBlocksRefs()) {
+          const key = `${ref.path}\0${ref.blockId}`;
+          if (!seen.has(key)) {
+            await index.addDocument([{ path: ref.path, blockId: ref.blockId }]);
+          }
+        }
+      }
+
       indexes.set(name, index);
       manifest.set(name, { name });
     }
@@ -253,6 +265,12 @@ export function createFlexSearchIndexer(
         manifest.delete(name);
         configs.delete(name);
       }
+    },
+
+    async flush(): Promise<void> {
+      ensureOpen();
+      await ensureInitialized();
+      await saveToPersistence();
     },
 
     async close(): Promise<void> {
