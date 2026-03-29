@@ -1,31 +1,40 @@
 import type {
-  BlockId,
-  CollectionFilter,
-  CollectionId,
+  BlockReference,
+  DocumentPath,
+  EmbeddingIndex,
   FullTextIndex,
-  HybridWeights,
+  HybridSearchParams,
+  HybridSearchResult,
   Index,
+  IndexedBlock,
   Metadata,
-  MultiSearchParams,
-  MultiSearchResult,
-  SearchResult,
-  VectorIndex,
+  PathSelector,
 } from "@repo/indexer-api";
-import { DEFAULT_COLLECTION, defaultMultiSearch } from "@repo/indexer-api";
 import { mergeByRRF, mergeByWeights } from "./hybrid-search.js";
+
+function compositeKey(path: DocumentPath, blockId: string): string {
+  return `${path}\0${blockId}`;
+}
+
+function matchesPrefix(path: DocumentPath, prefix: DocumentPath): boolean {
+  return path.startsWith(prefix);
+}
 
 export class MemIndex implements Index {
   readonly name: string;
   readonly metadata?: Metadata;
   private readonly fts: FullTextIndex | null;
-  private readonly vec: VectorIndex | null;
-  private readonly trackedBlockIds = new Map<CollectionId, Set<BlockId>>();
+  private readonly vec: EmbeddingIndex | null;
+  private readonly trackedBlocks = new Map<
+    string,
+    { path: DocumentPath; blockId: string }
+  >();
   private closed = false;
 
   constructor(
     name: string,
     fts: FullTextIndex | null,
-    vec: VectorIndex | null,
+    vec: EmbeddingIndex | null,
     metadata?: Metadata,
   ) {
     this.name = name;
@@ -40,231 +49,249 @@ export class MemIndex implements Index {
     }
   }
 
-  private trackBlock(blockId: BlockId, collectionId: CollectionId): void {
-    let set = this.trackedBlockIds.get(collectionId);
-    if (!set) {
-      set = new Set();
-      this.trackedBlockIds.set(collectionId, set);
-    }
-    set.add(blockId);
-  }
+  async *search(
+    params: HybridSearchParams,
+  ): AsyncGenerator<HybridSearchResult> {
+    this.ensureOpen();
+    const { queries, embeddings, topK, weights, paths } = params;
 
-  private untrackBlock(blockId: BlockId, collectionId?: CollectionId): void {
-    if (collectionId !== undefined) {
-      const set = this.trackedBlockIds.get(collectionId);
-      if (set) {
-        set.delete(blockId);
-        if (set.size === 0) this.trackedBlockIds.delete(collectionId);
+    const hasQueries = queries && queries.length > 0 && this.fts !== null;
+    const hasEmbeddings =
+      embeddings && embeddings.length > 0 && this.vec !== null;
+
+    if (!hasQueries && !hasEmbeddings) return;
+
+    // Collect FTS results
+    const ftsResults = [];
+    if (hasQueries) {
+      for await (const r of this.fts.search({
+        queries,
+        topK,
+        paths,
+      })) {
+        ftsResults.push(r);
       }
+    }
+
+    // Collect embedding results
+    const vecResults = [];
+    if (hasEmbeddings) {
+      for await (const r of this.vec.search({
+        embeddings,
+        topK,
+        paths,
+      })) {
+        vecResults.push(r);
+      }
+    }
+
+    // Merge
+    let merged: HybridSearchResult[];
+    if (ftsResults.length > 0 && vecResults.length > 0) {
+      merged = weights
+        ? mergeByWeights(ftsResults, vecResults, weights, topK)
+        : mergeByRRF(ftsResults, vecResults, topK);
+    } else if (ftsResults.length > 0) {
+      merged = ftsResults.map((r) => ({
+        path: r.path,
+        blockId: r.blockId,
+        score: r.score,
+        fts: r,
+        embedding: null,
+      }));
     } else {
-      for (const [cid, set] of this.trackedBlockIds) {
-        set.delete(blockId);
-        if (set.size === 0) this.trackedBlockIds.delete(cid);
-      }
+      merged = vecResults.map((r) => ({
+        path: r.path,
+        blockId: r.blockId,
+        score: r.score,
+        fts: null,
+        embedding: r,
+      }));
+    }
+
+    for (const r of merged.slice(0, topK)) {
+      yield r;
     }
   }
 
-  async search(params: {
-    query?: string;
-    embedding?: Float32Array;
-    topK: number;
-    weights?: HybridWeights;
-    collections?: CollectionFilter;
-  }): Promise<SearchResult[]> {
+  async addDocument(blocks: IndexedBlock[]): Promise<void> {
     this.ensureOpen();
-    const { query, embedding, topK, weights, collections } = params;
+    const ftsBlocks = [];
+    const vecBlocks = [];
 
-    const ftsAvailable = query !== undefined && this.fts !== null;
-    const vecAvailable = embedding !== undefined && this.vec !== null;
-
-    if (ftsAvailable && vecAvailable) {
-      const [ftsResults, vecResults] = await Promise.all([
-        this.fts.search({ query, topK, collections }),
-        this.vec.search({ embedding, topK, collections }),
-      ]);
-      if (weights) {
-        return mergeByWeights(ftsResults, vecResults, weights, topK);
+    for (const block of blocks) {
+      if (block.content !== undefined && this.fts !== null) {
+        ftsBlocks.push({
+          path: block.path,
+          blockId: block.blockId,
+          content: block.content,
+          metadata: block.metadata,
+        });
       }
-      return mergeByRRF(ftsResults, vecResults, topK);
-    }
-
-    if (ftsAvailable) {
-      return this.fts.search({ query, topK, collections });
-    }
-
-    if (vecAvailable) {
-      return this.vec.search({ embedding, topK, collections });
-    }
-
-    return [];
-  }
-
-  async addDocument(params: {
-    blockId: BlockId;
-    content?: string;
-    embedding?: Float32Array;
-    metadata?: Metadata;
-    collectionId?: CollectionId;
-  }): Promise<void> {
-    this.ensureOpen();
-    const { blockId, content, embedding, metadata, collectionId } = params;
-    const cid = collectionId ?? DEFAULT_COLLECTION;
-
-    let added = false;
-    if (content !== undefined && this.fts !== null) {
-      await this.fts.addDocument({
-        blockId,
-        content,
-        metadata,
-        collectionId: cid,
+      if (block.embedding !== undefined && this.vec !== null) {
+        vecBlocks.push({
+          path: block.path,
+          blockId: block.blockId,
+          embedding: block.embedding,
+          metadata: block.metadata,
+        });
+      }
+      const key = compositeKey(block.path, block.blockId);
+      this.trackedBlocks.set(key, {
+        path: block.path,
+        blockId: block.blockId,
       });
-      added = true;
     }
-    if (embedding !== undefined && this.vec !== null) {
-      await this.vec.addDocument({ blockId, embedding, collectionId: cid });
-      added = true;
-    }
-    if (added) {
-      this.trackBlock(blockId, cid);
-    }
+
+    if (ftsBlocks.length > 0) await this.fts?.addDocument(ftsBlocks);
+    if (vecBlocks.length > 0) await this.vec?.addDocument(vecBlocks);
   }
 
   async addDocuments(
-    docs:
-      | Iterable<{
-          blockId: BlockId;
-          content?: string;
-          embedding?: Float32Array;
-          metadata?: Metadata;
-          collectionId?: CollectionId;
-        }>
-      | AsyncIterable<{
-          blockId: BlockId;
-          content?: string;
-          embedding?: Float32Array;
-          metadata?: Metadata;
-          collectionId?: CollectionId;
-        }>,
+    blocks: Iterable<IndexedBlock[]> | AsyncIterable<IndexedBlock[]>,
   ): Promise<void> {
     this.ensureOpen();
-    for await (const doc of docs as AsyncIterable<{
-      blockId: BlockId;
-      content?: string;
-      embedding?: Float32Array;
-      metadata?: Metadata;
-      collectionId?: CollectionId;
-    }>) {
-      await this.addDocument(doc);
+    for await (const batch of blocks) {
+      await this.addDocument(batch);
     }
-  }
-
-  async deleteDocument(
-    blockId: BlockId,
-    collectionId?: CollectionId,
-  ): Promise<void> {
-    this.ensureOpen();
-    if (this.fts !== null) {
-      await this.fts.deleteDocument(blockId, collectionId);
-    }
-    if (this.vec !== null) {
-      await this.vec.deleteDocument(blockId, collectionId);
-    }
-    this.untrackBlock(blockId, collectionId);
   }
 
   async deleteDocuments(
-    blockIds: Iterable<BlockId> | AsyncIterable<BlockId>,
-    collectionId?: CollectionId,
+    pathSelectors: PathSelector[] | AsyncIterable<PathSelector>,
   ): Promise<void> {
     this.ensureOpen();
-    for await (const blockId of blockIds as AsyncIterable<BlockId>) {
-      await this.deleteDocument(blockId, collectionId);
+    const selectors: PathSelector[] = [];
+    for await (const sel of pathSelectors as AsyncIterable<PathSelector>) {
+      selectors.push(sel);
+    }
+
+    // Determine which tracked blocks match
+    const toDelete: PathSelector[] = [];
+    for (const sel of selectors) {
+      if (sel.blockId !== undefined) {
+        const key = compositeKey(sel.path, sel.blockId);
+        if (this.trackedBlocks.has(key)) {
+          this.trackedBlocks.delete(key);
+          toDelete.push(sel);
+        }
+      } else {
+        for (const [key, entry] of this.trackedBlocks) {
+          if (matchesPrefix(entry.path, sel.path)) {
+            this.trackedBlocks.delete(key);
+            toDelete.push({ path: entry.path, blockId: entry.blockId });
+          }
+        }
+      }
+    }
+
+    if (toDelete.length > 0) {
+      if (this.fts !== null) await this.fts.deleteDocuments(toDelete);
+      if (this.vec !== null) await this.vec.deleteDocuments(toDelete);
     }
   }
 
-  async deleteCollection(collectionId: CollectionId): Promise<void> {
+  async getSize(pathPrefix?: DocumentPath): Promise<number> {
     this.ensureOpen();
-    if (this.fts !== null) {
-      await this.fts.deleteCollection(collectionId);
+    if (pathPrefix === undefined) return this.trackedBlocks.size;
+    let count = 0;
+    for (const entry of this.trackedBlocks.values()) {
+      if (matchesPrefix(entry.path, pathPrefix)) count++;
     }
-    if (this.vec !== null) {
-      await this.vec.deleteCollection(collectionId);
-    }
-    this.trackedBlockIds.delete(collectionId);
+    return count;
   }
 
-  async hasDocument(
-    blockId: BlockId,
-    collectionId?: CollectionId,
-  ): Promise<boolean> {
+  async *getDocumentPaths(
+    pathPrefix?: DocumentPath,
+  ): AsyncGenerator<DocumentPath> {
     this.ensureOpen();
-    if (collectionId !== undefined) {
-      if (
-        this.fts !== null &&
-        (await this.fts.hasDocument(blockId, collectionId))
-      )
-        return true;
-      if (
-        this.vec !== null &&
-        (await this.vec.hasDocument(blockId, collectionId))
-      )
-        return true;
-      return false;
+    const paths = new Set<DocumentPath>();
+    for (const entry of this.trackedBlocks.values()) {
+      if (pathPrefix === undefined || matchesPrefix(entry.path, pathPrefix)) {
+        paths.add(entry.path);
+      }
     }
-    if (this.fts !== null && (await this.fts.hasDocument(blockId))) return true;
-    if (this.vec !== null && (await this.vec.hasDocument(blockId))) return true;
-    return false;
+    for (const p of paths) yield p;
   }
 
-  async getSize(collectionId?: CollectionId): Promise<number> {
+  async *getDocumentBlocksRefs(
+    pathPrefix?: DocumentPath,
+  ): AsyncGenerator<BlockReference> {
     this.ensureOpen();
-    if (collectionId !== undefined) {
-      return this.trackedBlockIds.get(collectionId)?.size ?? 0;
+    for (const entry of this.trackedBlocks.values()) {
+      if (pathPrefix === undefined || matchesPrefix(entry.path, pathPrefix)) {
+        yield { path: entry.path, blockId: entry.blockId };
+      }
     }
-    let total = 0;
-    for (const set of this.trackedBlockIds.values()) {
-      total += set.size;
-    }
-    return total;
   }
 
-  async getCollections(): Promise<CollectionId[]> {
+  async *getDocumentsBlocks(
+    pathPrefix?: DocumentPath,
+  ): AsyncGenerator<IndexedBlock> {
     this.ensureOpen();
-    return [...this.trackedBlockIds.keys()];
+    for (const entry of this.trackedBlocks.values()) {
+      if (pathPrefix !== undefined && !matchesPrefix(entry.path, pathPrefix)) {
+        continue;
+      }
+      const block: IndexedBlock = {
+        path: entry.path,
+        blockId: entry.blockId,
+      };
+      // Retrieve content from FTS sub-index if available
+      if (this.fts !== null) {
+        for await (const ftsBlock of this.fts.getDocumentsBlocks()) {
+          if (
+            ftsBlock.path === entry.path &&
+            ftsBlock.blockId === entry.blockId
+          ) {
+            block.content = ftsBlock.content;
+            block.metadata = ftsBlock.metadata;
+            break;
+          }
+        }
+      }
+      // Retrieve embedding from vec sub-index if available
+      if (this.vec !== null) {
+        for await (const vecBlock of this.vec.getDocumentsBlocks()) {
+          if (
+            vecBlock.path === entry.path &&
+            vecBlock.blockId === entry.blockId
+          ) {
+            block.embedding = vecBlock.embedding;
+            if (!block.metadata) block.metadata = vecBlock.metadata;
+            break;
+          }
+        }
+      }
+      yield block;
+    }
   }
 
   getFullTextIndex(): FullTextIndex | null {
     return this.fts;
   }
 
-  getVectorIndex(): VectorIndex | null {
+  getVectorIndex(): EmbeddingIndex | null {
     return this.vec;
   }
 
-  restoreTrackedBlockIds(
-    blockIds: Iterable<BlockId>,
-    collectionId?: CollectionId,
-  ): void {
-    const cid = collectionId ?? DEFAULT_COLLECTION;
-    let set = this.trackedBlockIds.get(cid);
-    if (!set) {
-      set = new Set();
-      this.trackedBlockIds.set(cid, set);
-    }
-    for (const id of blockIds) {
-      set.add(id);
-    }
-  }
-
-  async multiSearch(params: MultiSearchParams): Promise<MultiSearchResult> {
-    this.ensureOpen();
-    return defaultMultiSearch(this, params);
-  }
-
-  async close(): Promise<void> {
+  async close(_options?: { force?: boolean }): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     if (this.fts !== null) await this.fts.close();
     if (this.vec !== null) await this.vec.close();
+  }
+
+  async flush(): Promise<void> {
+    this.ensureOpen();
+    if (this.fts !== null) await this.fts.flush();
+    if (this.vec !== null) await this.vec.flush();
+  }
+
+  async deleteIndex(): Promise<void> {
+    this.ensureOpen();
+    if (this.fts !== null) await this.fts.deleteIndex();
+    if (this.vec !== null) await this.vec.deleteIndex();
+    this.trackedBlocks.clear();
+    this.closed = true;
   }
 }

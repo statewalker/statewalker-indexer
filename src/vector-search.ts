@@ -1,4 +1,4 @@
-import type { BlockId, SearchResult } from "@repo/indexer-api";
+import type { DocumentPath, EmbeddingSearchResult } from "@repo/indexer-api";
 
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   let dot = 0;
@@ -18,13 +18,17 @@ export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
 
 export function bruteForceSearch(
   query: Float32Array,
-  embeddings: Iterable<[BlockId, Float32Array]>,
+  entries: Iterable<{
+    path: DocumentPath;
+    blockId: string;
+    embedding: Float32Array;
+  }>,
   topK: number,
-): SearchResult[] {
-  const scored: SearchResult[] = [];
-  for (const [blockId, embedding] of embeddings) {
-    const score = cosineSimilarity(query, embedding);
-    scored.push({ blockId, score });
+): EmbeddingSearchResult[] {
+  const scored: EmbeddingSearchResult[] = [];
+  for (const entry of entries) {
+    const score = cosineSimilarity(query, entry.embedding);
+    scored.push({ path: entry.path, blockId: entry.blockId, score });
   }
   scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, topK);

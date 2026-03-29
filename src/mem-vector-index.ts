@@ -1,13 +1,13 @@
-import {
-  resolveCollections as apiResolveCollections,
-  type BlockId,
-  type CollectionFilter,
-  type CollectionId,
-  DEFAULT_COLLECTION,
-  isCollectionPrefix,
-  type SearchResult,
-  type VectorIndex,
-  type VectorIndexInfo,
+import type {
+  BlockReference,
+  DocumentPath,
+  EmbeddingBlock,
+  EmbeddingIndex,
+  EmbeddingIndexInfo,
+  EmbeddingSearchParams,
+  EmbeddingSearchResult,
+  Metadata,
+  PathSelector,
 } from "@repo/indexer-api";
 import {
   fixedSizeList,
@@ -19,19 +19,33 @@ import {
 } from "@uwdata/flechette";
 import { bruteForceSearch } from "./vector-search.js";
 
-export class MemVectorIndex implements VectorIndex {
-  private readonly info: VectorIndexInfo;
-  private readonly collections: Map<CollectionId, Map<BlockId, Float32Array>> =
-    new Map();
+interface StoredEntry {
+  path: DocumentPath;
+  blockId: string;
+  embedding: Float32Array;
+  metadata?: Metadata;
+}
+
+function compositeKey(path: DocumentPath, blockId: string): string {
+  return `${path}\0${blockId}`;
+}
+
+function matchesPrefix(path: DocumentPath, prefix: DocumentPath): boolean {
+  return path.startsWith(prefix);
+}
+
+export class MemVectorIndex implements EmbeddingIndex {
+  private readonly info: EmbeddingIndexInfo;
+  private readonly entries = new Map<string, StoredEntry>();
   private closed = false;
 
-  constructor(info: VectorIndexInfo) {
+  constructor(info: EmbeddingIndexInfo) {
     this.info = info;
   }
 
   private ensureOpen(): void {
     if (this.closed) {
-      throw new Error("VectorIndex is closed");
+      throw new Error("EmbeddingIndex is closed");
     }
   }
 
@@ -43,218 +57,176 @@ export class MemVectorIndex implements VectorIndex {
     }
   }
 
-  private getOrCreateCollection(
-    collectionId: CollectionId,
-  ): Map<BlockId, Float32Array> {
-    let coll = this.collections.get(collectionId);
-    if (!coll) {
-      coll = new Map();
-      this.collections.set(collectionId, coll);
+  private *filteredEntries(
+    pathPrefixes?: DocumentPath[],
+  ): Iterable<StoredEntry> {
+    if (!pathPrefixes || pathPrefixes.length === 0) {
+      yield* this.entries.values();
+      return;
     }
-    return coll;
-  }
-
-  private resolveCollections(filter?: CollectionFilter): CollectionId[] {
-    if (filter === undefined) {
-      return [...this.collections.keys()];
-    }
-    const filters = Array.isArray(filter) ? filter : [filter];
-    if (filters.some(isCollectionPrefix)) {
-      return apiResolveCollections(filter, [...this.collections.keys()]);
-    }
-    return filters;
-  }
-
-  private *iterateEntries(
-    collectionIds: CollectionId[],
-  ): Iterable<[BlockId, Float32Array]> {
-    for (const cid of collectionIds) {
-      const coll = this.collections.get(cid);
-      if (coll) {
-        yield* coll.entries();
+    for (const entry of this.entries.values()) {
+      if (pathPrefixes.some((p) => matchesPrefix(entry.path, p))) {
+        yield entry;
       }
     }
   }
 
-  async getIndexInfo(): Promise<VectorIndexInfo> {
+  async getIndexInfo(): Promise<EmbeddingIndexInfo> {
     this.ensureOpen();
     return { ...this.info };
   }
 
-  async deleteIndex(): Promise<void> {
+  async *search(
+    params: EmbeddingSearchParams,
+  ): AsyncGenerator<EmbeddingSearchResult> {
     this.ensureOpen();
-    this.closed = true;
-    this.collections.clear();
-  }
+    const { embeddings, topK, paths } = params;
 
-  async search(params: {
-    topK: number;
-    embedding: Float32Array;
-    collections?: CollectionFilter;
-  }): Promise<SearchResult[]> {
-    this.ensureOpen();
-    this.validateDimensionality(params.embedding);
-    const collIds = this.resolveCollections(params.collections);
-    const entries = this.iterateEntries(collIds);
-    const results = bruteForceSearch(params.embedding, entries, params.topK);
-    if (params.collections !== undefined) {
-      return results.map((r) => ({
-        ...r,
-        collectionId: this.findCollectionForBlock(r.blockId, collIds),
-      }));
+    if (!embeddings || embeddings.length === 0) return;
+
+    // Multi-embedding: search for each, merge by best score
+    const bestScores = new Map<string, EmbeddingSearchResult>();
+
+    for (const queryEmb of embeddings) {
+      this.validateDimensionality(queryEmb);
+      const filtered = [...this.filteredEntries(paths)];
+      const results = bruteForceSearch(queryEmb, filtered, topK);
+      for (const r of results) {
+        const key = compositeKey(r.path, r.blockId);
+        const existing = bestScores.get(key);
+        if (!existing || r.score > existing.score) {
+          bestScores.set(key, r);
+        }
+      }
     }
-    return results;
-  }
 
-  private findCollectionForBlock(
-    blockId: BlockId,
-    collectionIds: CollectionId[],
-  ): CollectionId | undefined {
-    for (const cid of collectionIds) {
-      if (this.collections.get(cid)?.has(blockId)) return cid;
+    const sorted = [...bestScores.values()].sort((a, b) => b.score - a.score);
+    for (const r of sorted.slice(0, topK)) {
+      yield r;
     }
-    return undefined;
   }
 
-  async addDocument(params: {
-    blockId: BlockId;
-    embedding: Float32Array;
-    collectionId?: CollectionId;
-  }): Promise<void> {
+  async addDocument(blocks: EmbeddingBlock[]): Promise<void> {
     this.ensureOpen();
-    this.validateDimensionality(params.embedding);
-    const cid = params.collectionId ?? DEFAULT_COLLECTION;
-    this.getOrCreateCollection(cid).set(
-      params.blockId,
-      new Float32Array(params.embedding),
-    );
+    for (const block of blocks) {
+      this.validateDimensionality(block.embedding);
+      const key = compositeKey(block.path, block.blockId);
+      this.entries.set(key, {
+        path: block.path,
+        blockId: block.blockId,
+        embedding: new Float32Array(block.embedding),
+        metadata: block.metadata,
+      });
+    }
   }
 
   async addDocuments(
-    docs:
-      | Iterable<{
-          blockId: BlockId;
-          embedding: Float32Array;
-          collectionId?: CollectionId;
-        }>
-      | AsyncIterable<{
-          blockId: BlockId;
-          embedding: Float32Array;
-          collectionId?: CollectionId;
-        }>,
+    blocks: Iterable<EmbeddingBlock[]> | AsyncIterable<EmbeddingBlock[]>,
   ): Promise<void> {
     this.ensureOpen();
-    for await (const doc of docs as AsyncIterable<{
-      blockId: BlockId;
-      embedding: Float32Array;
-      collectionId?: CollectionId;
-    }>) {
-      await this.addDocument(doc);
-    }
-  }
-
-  async deleteDocument(
-    blockId: BlockId,
-    collectionId?: CollectionId,
-  ): Promise<void> {
-    this.ensureOpen();
-    if (collectionId !== undefined) {
-      const coll = this.collections.get(collectionId);
-      if (coll) {
-        coll.delete(blockId);
-        if (coll.size === 0) this.collections.delete(collectionId);
-      }
-    } else {
-      for (const [cid, coll] of this.collections) {
-        coll.delete(blockId);
-        if (coll.size === 0) this.collections.delete(cid);
-      }
+    for await (const batch of blocks) {
+      await this.addDocument(batch);
     }
   }
 
   async deleteDocuments(
-    blockIds: Iterable<BlockId> | AsyncIterable<BlockId>,
-    collectionId?: CollectionId,
+    pathSelectors: PathSelector[] | AsyncIterable<PathSelector>,
   ): Promise<void> {
     this.ensureOpen();
-    for await (const blockId of blockIds as AsyncIterable<BlockId>) {
-      await this.deleteDocument(blockId, collectionId);
+    for await (const sel of pathSelectors as AsyncIterable<PathSelector>) {
+      if (sel.blockId !== undefined) {
+        this.entries.delete(compositeKey(sel.path, sel.blockId));
+      } else {
+        for (const [key, entry] of this.entries) {
+          if (matchesPrefix(entry.path, sel.path)) {
+            this.entries.delete(key);
+          }
+        }
+      }
     }
   }
 
-  async deleteCollection(collectionId: CollectionId): Promise<void> {
+  async getSize(pathPrefix?: DocumentPath): Promise<number> {
     this.ensureOpen();
-    this.collections.delete(collectionId);
+    if (pathPrefix === undefined) return this.entries.size;
+    let count = 0;
+    for (const entry of this.entries.values()) {
+      if (matchesPrefix(entry.path, pathPrefix)) count++;
+    }
+    return count;
   }
 
-  async hasDocument(
-    blockId: BlockId,
-    collectionId?: CollectionId,
-  ): Promise<boolean> {
+  async *getDocumentPaths(
+    pathPrefix?: DocumentPath,
+  ): AsyncGenerator<DocumentPath> {
     this.ensureOpen();
-    if (collectionId !== undefined) {
-      return this.collections.get(collectionId)?.has(blockId) ?? false;
+    const paths = new Set<DocumentPath>();
+    for (const entry of this.entries.values()) {
+      if (pathPrefix === undefined || matchesPrefix(entry.path, pathPrefix)) {
+        paths.add(entry.path);
+      }
     }
-    for (const coll of this.collections.values()) {
-      if (coll.has(blockId)) return true;
-    }
-    return false;
+    for (const p of paths) yield p;
   }
 
-  async getSize(collectionId?: CollectionId): Promise<number> {
+  async *getDocumentBlocksRefs(
+    pathPrefix?: DocumentPath,
+  ): AsyncGenerator<BlockReference> {
     this.ensureOpen();
-    if (collectionId !== undefined) {
-      return this.collections.get(collectionId)?.size ?? 0;
+    for (const entry of this.entries.values()) {
+      if (pathPrefix === undefined || matchesPrefix(entry.path, pathPrefix)) {
+        yield { path: entry.path, blockId: entry.blockId };
+      }
     }
-    let total = 0;
-    for (const coll of this.collections.values()) {
-      total += coll.size;
-    }
-    return total;
   }
 
-  async getCollections(): Promise<CollectionId[]> {
+  async *getDocumentsBlocks(
+    pathPrefix?: DocumentPath,
+  ): AsyncGenerator<EmbeddingBlock> {
     this.ensureOpen();
-    return [...this.collections.keys()];
+    for (const entry of this.entries.values()) {
+      if (pathPrefix === undefined || matchesPrefix(entry.path, pathPrefix)) {
+        yield {
+          path: entry.path,
+          blockId: entry.blockId,
+          embedding: entry.embedding,
+          metadata: entry.metadata,
+        };
+      }
+    }
   }
 
-  async close(): Promise<void> {
+  async close(_options?: { force?: boolean }): Promise<void> {
     this.closed = true;
   }
 
-  /** Get the set of block IDs stored in this index (across all collections) */
-  getBlockIds(): Set<string> {
-    const ids = new Set<string>();
-    for (const coll of this.collections.values()) {
-      for (const id of coll.keys()) {
-        ids.add(id);
-      }
-    }
-    return ids;
+  async flush(): Promise<void> {
+    this.ensureOpen();
+    // no-op for in-memory
+  }
+
+  async deleteIndex(): Promise<void> {
+    this.ensureOpen();
+    this.entries.clear();
+    this.closed = true;
   }
 
   /** Serialize embeddings to Arrow IPC format */
   serializeToArrow(): Uint8Array {
     const dim = this.info.dimensionality;
+    const paths: string[] = [];
     const blockIds: string[] = [];
-    const collectionIds: string[] = [];
     const embeddingArrays: number[][] = [];
-    for (const [cid, coll] of this.collections) {
-      for (const [blockId, emb] of coll) {
-        collectionIds.push(cid);
-        blockIds.push(blockId);
-        embeddingArrays.push(Array.from(emb));
-      }
+    for (const entry of this.entries.values()) {
+      paths.push(entry.path);
+      blockIds.push(entry.blockId);
+      embeddingArrays.push(Array.from(entry.embedding));
     }
     const table = tableFromArrays(
-      {
-        collectionId: collectionIds,
-        blockId: blockIds,
-        embedding: embeddingArrays,
-      },
+      { path: paths, blockId: blockIds, embedding: embeddingArrays },
       {
         types: {
-          collectionId: utf8(),
+          path: utf8(),
           blockId: utf8(),
           embedding: fixedSizeList(float32(), dim),
         },
@@ -265,21 +237,20 @@ export class MemVectorIndex implements VectorIndex {
 
   /** Deserialize embeddings from Arrow IPC format */
   static deserializeFromArrow(
-    info: VectorIndexInfo,
+    info: EmbeddingIndexInfo,
     data: Uint8Array,
   ): MemVectorIndex {
     const table = tableFromIPC(data);
     const vec = new MemVectorIndex(info);
+    const pathCol = table.getChild("path");
     const blockIdCol = table.getChild("blockId");
     const embCol = table.getChild("embedding");
-    const collCol = table.getChild("collectionId");
     for (let i = 0; i < table.numRows; i++) {
+      const path = pathCol.at(i) as string as DocumentPath;
       const blockId = blockIdCol.at(i) as string;
-      const emb = new Float32Array(embCol.at(i) as ArrayLike<number>);
-      const collectionId = collCol
-        ? (collCol.at(i) as string)
-        : DEFAULT_COLLECTION;
-      vec.getOrCreateCollection(collectionId).set(blockId, emb);
+      const embedding = new Float32Array(embCol.at(i) as ArrayLike<number>);
+      const key = compositeKey(path, blockId);
+      vec.entries.set(key, { path, blockId, embedding });
     }
     return vec;
   }
