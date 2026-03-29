@@ -5,7 +5,7 @@
  * MIT License — Copyright (c) 2024-2026 Tobi Lutke.
  */
 
-import type { BlockId, SearchResult } from "./types.js";
+import type { ScoredItem } from "./rrf.js";
 
 export interface BlendTier {
   maxRank: number;
@@ -28,10 +28,10 @@ function getTier(rank: number, tiers: BlendTier[]): BlendTier {
 }
 
 export function blendWithReranker(
-  retrievalResults: SearchResult[],
-  rerankScores: Map<BlockId, number>,
+  retrievalResults: ScoredItem[],
+  rerankScores: Map<string, number>,
   tiers: BlendTier[] = DEFAULT_BLEND_TIERS,
-): SearchResult[] {
+): ScoredItem[] {
   const blended = retrievalResults.map((result, i) => {
     const rank = i + 1;
     const retrievalScore = 1 / rank;

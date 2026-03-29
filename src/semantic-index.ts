@@ -1,12 +1,12 @@
-import type { Index } from "./indexer-index.js";
 import type {
-  BlockId,
-  CollectionFilter,
-  CollectionId,
+  DocumentPath,
+  HybridSearchResult,
   HybridWeights,
+  Index,
+  IndexedBlock,
   Metadata,
-  SearchResult,
-} from "./types.js";
+  PathSelector,
+} from "./indexer-index.js";
 
 export type EmbedFn = (text: string) => Promise<Float32Array>;
 
@@ -24,140 +24,97 @@ export class SemanticIndex {
     semanticQuery?: string;
     topK: number;
     weights?: HybridWeights;
-    collections?: CollectionFilter;
-  }): Promise<SearchResult[]> {
-    const { query, semanticQuery, topK, weights, collections } = params;
+    paths?: DocumentPath[];
+  }): Promise<HybridSearchResult[]> {
+    const { query, semanticQuery, topK, weights, paths } = params;
     const hasVector = this.index.getVectorIndex() !== null;
 
-    if (hasVector) {
-      const embedding = await this.embed(semanticQuery ?? query);
-      return this.index.search({
-        query,
-        embedding,
-        topK,
-        weights,
-        collections,
-      });
+    const searchParams = hasVector
+      ? {
+          queries: [query],
+          embeddings: [await this.embed(semanticQuery ?? query)],
+          topK,
+          weights,
+          paths,
+        }
+      : { queries: [query], topK, weights, paths };
+
+    const results: HybridSearchResult[] = [];
+    for await (const r of this.index.search(searchParams)) {
+      results.push(r);
     }
-    return this.index.search({ query, topK, weights, collections });
+    return results;
   }
 
   async addDocument(params: {
-    blockId: BlockId;
+    path: DocumentPath;
+    blockId: string;
     content: string;
     embeddingContent?: string;
     metadata?: Metadata;
-    collectionId?: CollectionId;
   }): Promise<void> {
-    const { blockId, content, embeddingContent, metadata, collectionId } =
-      params;
+    const { path, blockId, content, embeddingContent, metadata } = params;
     const hasVector = this.index.getVectorIndex() !== null;
 
+    const block: IndexedBlock = { path, blockId, content, metadata };
     if (hasVector) {
-      const embedding = await this.embed(embeddingContent ?? content);
-      return this.index.addDocument({
-        blockId,
-        content,
-        embedding,
-        metadata,
-        collectionId,
-      });
+      block.embedding = await this.embed(embeddingContent ?? content);
     }
-    return this.index.addDocument({ blockId, content, metadata, collectionId });
+    return this.index.addDocument([block]);
   }
 
   async addDocuments(
     docs:
       | Iterable<{
-          blockId: BlockId;
+          path: DocumentPath;
+          blockId: string;
           content: string;
           embeddingContent?: string;
           metadata?: Metadata;
-          collectionId?: CollectionId;
         }>
       | AsyncIterable<{
-          blockId: BlockId;
+          path: DocumentPath;
+          blockId: string;
           content: string;
           embeddingContent?: string;
           metadata?: Metadata;
-          collectionId?: CollectionId;
         }>,
   ): Promise<void> {
     const hasVector = this.index.getVectorIndex() !== null;
+    const embed = this.embed;
 
     const mapped = async function* (
-      embed: EmbedFn,
-      source:
-        | Iterable<{
-            blockId: BlockId;
-            content: string;
-            embeddingContent?: string;
-            metadata?: Metadata;
-            collectionId?: CollectionId;
-          }>
-        | AsyncIterable<{
-            blockId: BlockId;
-            content: string;
-            embeddingContent?: string;
-            metadata?: Metadata;
-            collectionId?: CollectionId;
-          }>,
-    ) {
+      source: typeof docs,
+    ): AsyncGenerator<IndexedBlock[]> {
       for await (const doc of source) {
+        const block: IndexedBlock = {
+          path: doc.path,
+          blockId: doc.blockId,
+          content: doc.content,
+          metadata: doc.metadata,
+        };
         if (hasVector) {
-          const embedding = await embed(doc.embeddingContent ?? doc.content);
-          yield {
-            blockId: doc.blockId,
-            content: doc.content,
-            embedding,
-            metadata: doc.metadata,
-            collectionId: doc.collectionId,
-          };
-        } else {
-          yield {
-            blockId: doc.blockId,
-            content: doc.content,
-            metadata: doc.metadata,
-            collectionId: doc.collectionId,
-          };
+          block.embedding = await embed(doc.embeddingContent ?? doc.content);
         }
+        yield [block];
       }
     };
 
-    return this.index.addDocuments(mapped(this.embed, docs));
+    return this.index.addDocuments(mapped(docs));
   }
 
-  async deleteDocument(
-    blockId: BlockId,
-    collectionId?: CollectionId,
-  ): Promise<void> {
-    return this.index.deleteDocument(blockId, collectionId);
+  async deleteDocuments(pathSelectors: PathSelector[]): Promise<void> {
+    return this.index.deleteDocuments(pathSelectors);
   }
 
-  async deleteDocuments(
-    blockIds: Iterable<BlockId> | AsyncIterable<BlockId>,
-    collectionId?: CollectionId,
-  ): Promise<void> {
-    return this.index.deleteDocuments(blockIds, collectionId);
+  async getSize(pathPrefix?: DocumentPath): Promise<number> {
+    return this.index.getSize(pathPrefix);
   }
 
-  async deleteCollection(collectionId: CollectionId): Promise<void> {
-    return this.index.deleteCollection(collectionId);
-  }
-
-  async hasDocument(
-    blockId: BlockId,
-    collectionId?: CollectionId,
-  ): Promise<boolean> {
-    return this.index.hasDocument(blockId, collectionId);
-  }
-
-  async getSize(collectionId?: CollectionId): Promise<number> {
-    return this.index.getSize(collectionId);
-  }
-
-  async getCollections(): Promise<CollectionId[]> {
-    return this.index.getCollections();
+  async *getDocumentPaths(
+    pathPrefix?: DocumentPath,
+  ): AsyncGenerator<DocumentPath> {
+    yield* this.index.getDocumentPaths(pathPrefix);
   }
 
   async close(): Promise<void> {

@@ -4,7 +4,7 @@ import {
   blendWithReranker,
   DEFAULT_BLEND_TIERS,
 } from "../reranker-blend.js";
-import type { SearchResult } from "../types.js";
+import type { ScoredItem } from "../rrf.js";
 
 describe("blendWithReranker", () => {
   // ---------------------------------------------------------------------------
@@ -42,7 +42,7 @@ describe("blendWithReranker", () => {
   // ---------------------------------------------------------------------------
   describe("score calculation", () => {
     it("computes blended score for rank 1 with default tiers", () => {
-      const results: SearchResult[] = [{ blockId: "a", score: 0.9 }];
+      const results: ScoredItem[] = [{ blockId: "a", score: 0.9 }];
       const rerank = new Map([["a", 0.8]]);
       const blended = blendWithReranker(results, rerank);
 
@@ -54,7 +54,7 @@ describe("blendWithReranker", () => {
     });
 
     it("computes blended score for rank 5 (tier 2)", () => {
-      const results: SearchResult[] = Array.from({ length: 5 }, (_, i) => ({
+      const results: ScoredItem[] = Array.from({ length: 5 }, (_, i) => ({
         blockId: `item-${i}`,
         score: 0.9 - i * 0.1,
       }));
@@ -69,7 +69,7 @@ describe("blendWithReranker", () => {
     });
 
     it("computes blended score for rank 15 (tier 3)", () => {
-      const results: SearchResult[] = Array.from({ length: 15 }, (_, i) => ({
+      const results: ScoredItem[] = Array.from({ length: 15 }, (_, i) => ({
         blockId: `item-${i}`,
         score: 1 - i * 0.05,
       }));
@@ -83,13 +83,11 @@ describe("blendWithReranker", () => {
       expect(item14?.score).toBeCloseTo(0.4 / 15 + 0.6 * 0.6, 10);
     });
 
-    it("preserves collectionId in output", () => {
-      const results: SearchResult[] = [
-        { blockId: "a", score: 0.9, collectionId: "col1" },
-      ];
+    it("preserves blockId in output", () => {
+      const results: ScoredItem[] = [{ blockId: "a", score: 0.9 }];
       const rerank = new Map([["a", 0.5]]);
       const blended = blendWithReranker(results, rerank);
-      expect(blended[0]?.collectionId).toBe("col1");
+      expect(blended[0]?.blockId).toBe("a");
     });
   });
 
@@ -98,7 +96,7 @@ describe("blendWithReranker", () => {
   // ---------------------------------------------------------------------------
   describe("re-ordering", () => {
     it("high reranker score can promote a low-ranked item", () => {
-      const results: SearchResult[] = [
+      const results: ScoredItem[] = [
         { blockId: "top", score: 0.95 },
         { blockId: "mid", score: 0.8 },
         { blockId: "low", score: 0.6 },
@@ -120,7 +118,7 @@ describe("blendWithReranker", () => {
     });
 
     it("top items are protected by high retrieval weight", () => {
-      const results: SearchResult[] = [
+      const results: ScoredItem[] = [
         { blockId: "first", score: 0.99 },
         { blockId: "second", score: 0.9 },
       ];
@@ -139,7 +137,7 @@ describe("blendWithReranker", () => {
     });
 
     it("results are sorted descending by blended score", () => {
-      const results: SearchResult[] = Array.from({ length: 5 }, (_, i) => ({
+      const results: ScoredItem[] = Array.from({ length: 5 }, (_, i) => ({
         blockId: `r${i}`,
         score: 1 - i * 0.1,
       }));
@@ -170,7 +168,7 @@ describe("blendWithReranker", () => {
   describe("custom tiers", () => {
     it("single tier applies to all ranks", () => {
       const tiers: BlendTier[] = [{ maxRank: Infinity, retrievalWeight: 0.5 }];
-      const results: SearchResult[] = [
+      const results: ScoredItem[] = [
         { blockId: "a", score: 0.9 },
         { blockId: "b", score: 0.7 },
       ];
@@ -194,7 +192,7 @@ describe("blendWithReranker", () => {
         { maxRank: 2, retrievalWeight: 0.1 },
         { maxRank: Infinity, retrievalWeight: 0.5 },
       ];
-      const results: SearchResult[] = [
+      const results: ScoredItem[] = [
         { blockId: "a", score: 0.9 },
         { blockId: "b", score: 0.8 },
         { blockId: "c", score: 0.7 },
@@ -227,7 +225,7 @@ describe("blendWithReranker", () => {
     });
 
     it("handles single result", () => {
-      const results: SearchResult[] = [{ blockId: "only", score: 0.5 }];
+      const results: ScoredItem[] = [{ blockId: "only", score: 0.5 }];
       const rerank = new Map([["only", 0.8]]);
       const blended = blendWithReranker(results, rerank);
 
@@ -238,7 +236,7 @@ describe("blendWithReranker", () => {
     });
 
     it("missing reranker scores default to 0", () => {
-      const results: SearchResult[] = [
+      const results: ScoredItem[] = [
         { blockId: "a", score: 0.9 },
         { blockId: "b", score: 0.8 },
       ];
@@ -254,7 +252,7 @@ describe("blendWithReranker", () => {
     });
 
     it("identical reranker scores preserve original order", () => {
-      const results: SearchResult[] = [
+      const results: ScoredItem[] = [
         { blockId: "a", score: 0.9 },
         { blockId: "b", score: 0.8 },
         { blockId: "c", score: 0.7 },
@@ -272,7 +270,7 @@ describe("blendWithReranker", () => {
     });
 
     it("does not mutate the input array", () => {
-      const results: SearchResult[] = [
+      const results: ScoredItem[] = [
         { blockId: "a", score: 0.9 },
         { blockId: "b", score: 0.8 },
       ];

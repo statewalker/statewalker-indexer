@@ -1,23 +1,55 @@
-import type { Index } from "./indexer-index.js";
-import { type RankedList, reciprocalRankFusion } from "./rrf.js";
 import type {
-  BlockId,
-  GroupedSearchResult,
-  MultiSearchParams,
-  MultiSearchResult,
-  ScoredResult,
-} from "./types.js";
+  DocumentPath,
+  HybridSearchResult,
+  HybridWeights,
+  Index,
+} from "./indexer-index.js";
+import {
+  type RankedList,
+  reciprocalRankFusion,
+  type ScoredItem,
+} from "./rrf.js";
+
+/** Collect all results from an async generator into an array. */
+async function collectResults(
+  gen: AsyncGenerator<HybridSearchResult>,
+): Promise<HybridSearchResult[]> {
+  const results: HybridSearchResult[] = [];
+  for await (const r of gen) {
+    results.push(r);
+  }
+  return results;
+}
+
+/** Parameters for multi-query search with RRF fusion. */
+export interface MultiSearchParams {
+  /** FTS queries — blocks matching more queries rank higher. */
+  queries?: string[];
+  /** Embedding vectors — blocks closer to more vectors rank higher. */
+  embeddings?: Float32Array[];
+  /** Maximum number of results to return. */
+  topK: number;
+  /** Relative weights for blending FTS and embedding scores. */
+  weights?: HybridWeights;
+  /** Path prefixes to restrict search scope. */
+  paths?: DocumentPath[];
+}
+
+/** A scored result with cross-query match count. */
+export interface MultiSearchResult extends ScoredItem {
+  /** How many of the input queries matched this block. */
+  matchCount: number;
+}
 
 /**
- * Default multiSearch implementation that works with any Index.
- * Fans out individual queries/embeddings, fuses with RRF, tracks matchCount.
+ * Multi-query search utility that fans out individual queries/embeddings
+ * to the index, fuses results with RRF, and tracks matchCount.
  */
 export async function defaultMultiSearch(
   index: Index,
   params: MultiSearchParams,
-): Promise<MultiSearchResult> {
-  const { queries, embeddings, topK, weights, collections, groupByCollection } =
-    params;
+): Promise<MultiSearchResult[]> {
+  const { queries, embeddings, topK, weights, paths } = params;
 
   const hasQueries = queries && queries.length > 0;
   const hasEmbeddings = embeddings && embeddings.length > 0;
@@ -33,7 +65,13 @@ export async function defaultMultiSearch(
   if (hasQueries) {
     for (const query of queries) {
       searchPromises.push(
-        index.search({ query, topK, weights, collections }).then((results) => {
+        collectResults(
+          index.search({ queries: [query], topK, weights, paths }),
+        ).then((hybridResults) => {
+          const results = hybridResults.map((r) => ({
+            blockId: r.blockId,
+            score: r.score,
+          }));
           rankedLists.push({
             results,
             meta: { source: "fts", queryType: "lex", query },
@@ -46,14 +84,18 @@ export async function defaultMultiSearch(
   if (hasEmbeddings) {
     for (const embedding of embeddings) {
       searchPromises.push(
-        index
-          .search({ embedding, topK, weights, collections })
-          .then((results) => {
-            rankedLists.push({
-              results,
-              meta: { source: "vec", queryType: "vec", query: "" },
-            });
-          }),
+        collectResults(
+          index.search({ embeddings: [embedding], topK, weights, paths }),
+        ).then((hybridResults) => {
+          const results = hybridResults.map((r) => ({
+            blockId: r.blockId,
+            score: r.score,
+          }));
+          rankedLists.push({
+            results,
+            meta: { source: "vec", queryType: "vec", query: "" },
+          });
+        }),
       );
     }
   }
@@ -61,9 +103,9 @@ export async function defaultMultiSearch(
   await Promise.all(searchPromises);
 
   // Track which queries matched each document
-  const matchCounts = new Map<BlockId, number>();
+  const matchCounts = new Map<string, number>();
   for (const list of rankedLists) {
-    const seen = new Set<BlockId>();
+    const seen = new Set<string>();
     for (const r of list.results) {
       if (!seen.has(r.blockId)) {
         seen.add(r.blockId);
@@ -72,52 +114,12 @@ export async function defaultMultiSearch(
     }
   }
 
-  // Track collectionId from results
-  const collectionMap = new Map<BlockId, string>();
-  for (const list of rankedLists) {
-    for (const r of list.results) {
-      if (r.collectionId && !collectionMap.has(r.blockId)) {
-        collectionMap.set(r.blockId, r.collectionId);
-      }
-    }
-  }
-
   // Fuse with RRF
   const fused = reciprocalRankFusion(rankedLists, topK);
 
-  // Build scored results
-  const scored: ScoredResult[] = fused.map((r) => ({
-    ...r,
-    collectionId: collectionMap.get(r.blockId) ?? r.collectionId,
+  return fused.map((r) => ({
+    blockId: r.blockId,
+    score: r.score,
     matchCount: matchCounts.get(r.blockId) ?? 1,
   }));
-
-  if (!groupByCollection) {
-    return scored;
-  }
-
-  // Group by collection
-  const groups = new Map<string, ScoredResult[]>();
-  for (const r of scored) {
-    const cid = r.collectionId ?? "_default";
-    let group = groups.get(cid);
-    if (!group) {
-      group = [];
-      groups.set(cid, group);
-    }
-    if (group.length < topK) {
-      group.push(r);
-    }
-  }
-
-  // Sort groups by best score
-  const result: GroupedSearchResult[] = [...groups.entries()]
-    .map(([collectionId, results]) => ({ collectionId, results }))
-    .sort((a, b) => {
-      const aScore = a.results[0]?.score ?? 0;
-      const bScore = b.results[0]?.score ?? 0;
-      return bScore - aScore;
-    });
-
-  return result;
 }

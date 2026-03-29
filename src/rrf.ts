@@ -5,10 +5,14 @@
  * MIT License — Copyright (c) 2024-2026 Tobi Lutke.
  */
 
-import type { BlockId, SearchResult } from "./types.js";
+/** Minimal scored item — any object with blockId and score works. */
+export interface ScoredItem {
+  blockId: string;
+  score: number;
+}
 
 export interface RankedList {
-  results: SearchResult[];
+  results: ScoredItem[];
   weight?: number;
   meta?: { source: string; queryType: string; query: string };
 }
@@ -46,9 +50,9 @@ export function reciprocalRankFusion(
   lists: RankedList[],
   topK: number,
   k = 60,
-): SearchResult[] {
-  const scores = new Map<BlockId, number>();
-  const bestRank = new Map<BlockId, number>();
+): ScoredItem[] {
+  const scores = new Map<string, number>();
+  const bestRank = new Map<string, number>();
 
   for (const list of lists) {
     const w = list.weight ?? 1.0;
@@ -86,10 +90,10 @@ export function reciprocalRankFusion(
 export function buildRrfTrace(
   lists: RankedList[],
   k = 60,
-): Map<BlockId, RRFTrace> {
-  const traces = new Map<BlockId, RRFTrace>();
+): Map<string, RRFTrace> {
+  const traces = new Map<string, RRFTrace>();
 
-  function getOrCreate(blockId: BlockId): RRFTrace {
+  function getOrCreate(blockId: string): RRFTrace {
     let trace = traces.get(blockId);
     if (!trace) {
       trace = {
