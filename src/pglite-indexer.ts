@@ -14,10 +14,6 @@ export interface PGLiteIndexerOptions {
   db?: PGlite;
 }
 
-/**
- * Sanitize an index name to produce a safe SQL identifier prefix.
- * Replaces non-alphanumeric characters with underscores.
- */
 function sanitizePrefix(name: string): string {
   return name.replace(/[^a-zA-Z0-9]/g, (ch) => `_${ch.charCodeAt(0)}_`);
 }
@@ -31,17 +27,14 @@ export async function createPGLiteIndexer(
   const manifest = new Map<string, IndexInfo>();
   let closed = false;
 
-  // Enable pgvector extension
-  await db.exec(`CREATE EXTENSION IF NOT EXISTS vector`);
+  await db.exec("CREATE EXTENSION IF NOT EXISTS vector");
 
-  // Create manifest table
   await db.exec(
-    `CREATE TABLE IF NOT EXISTS __indexer_manifest (name TEXT PRIMARY KEY, config TEXT NOT NULL)`,
+    "CREATE TABLE IF NOT EXISTS __indexer_manifest (name TEXT PRIMARY KEY, config TEXT NOT NULL)",
   );
 
-  // Load existing manifest entries
   const existingEntries = await db.query<{ name: string; config: string }>(
-    `SELECT name, config FROM __indexer_manifest`,
+    "SELECT name, config FROM __indexer_manifest",
   );
   for (const entry of existingEntries.rows) {
     manifest.set(entry.name, { name: entry.name });
@@ -51,6 +44,14 @@ export async function createPGLiteIndexer(
     if (closed) {
       throw new Error("Indexer is closed");
     }
+  }
+
+  async function createDocsTable(prefix: string): Promise<string> {
+    const docsTable = `idx_${prefix}_docs`;
+    await db.exec(
+      `CREATE TABLE IF NOT EXISTS ${docsTable} (doc_id SERIAL PRIMARY KEY, path TEXT NOT NULL UNIQUE)`,
+    );
+    return docsTable;
   }
 
   const indexer: Indexer = {
@@ -70,16 +71,14 @@ export async function createPGLiteIndexer(
       if (indexes.has(name) || manifest.has(name)) {
         if (overwrite) {
           const old = indexes.get(name);
-          if (old) {
-            await old.close();
-          }
+          if (old) await old.close();
           indexes.delete(name);
           manifest.delete(name);
-          // Drop existing tables
           const prefix = sanitizePrefix(name);
           await db.exec(`DROP TABLE IF EXISTS idx_${prefix}_fts`);
           await db.exec(`DROP TABLE IF EXISTS idx_${prefix}_vec`);
-          await db.query(`DELETE FROM __indexer_manifest WHERE name = $1`, [
+          await db.exec(`DROP TABLE IF EXISTS idx_${prefix}_docs`);
+          await db.query("DELETE FROM __indexer_manifest WHERE name = $1", [
             name,
           ]);
         } else {
@@ -88,16 +87,17 @@ export async function createPGLiteIndexer(
       }
 
       const prefix = sanitizePrefix(name);
+      const docsTable = await createDocsTable(prefix);
 
       const fts = fulltext
-        ? new PGLiteFullTextIndex(db, prefix, {
+        ? new PGLiteFullTextIndex(db, prefix, docsTable, {
             language: fulltext.language,
             metadata: fulltext.metadata,
           })
         : null;
 
       const vec = vector
-        ? new PGLiteVectorIndex(db, prefix, {
+        ? new PGLiteVectorIndex(db, prefix, docsTable, {
             dimensionality: vector.dimensionality,
             model: vector.model,
             metadata: vector.metadata,
@@ -109,11 +109,11 @@ export async function createPGLiteIndexer(
 
       const config = JSON.stringify({ fulltext, vector });
       await db.query(
-        `INSERT INTO __indexer_manifest (name, config) VALUES ($1, $2)`,
+        "INSERT INTO __indexer_manifest (name, config) VALUES ($1, $2)",
         [name, config],
       );
 
-      const index = new PGLiteIndex(name, fts, vec);
+      const index = new PGLiteIndex(name, db, docsTable, fts, vec);
       indexes.set(name, index);
       manifest.set(name, { name });
 
@@ -129,9 +129,8 @@ export async function createPGLiteIndexer(
         return null;
       }
 
-      // Reconstruct index from manifest
       const result = await db.query<{ config: string }>(
-        `SELECT config FROM __indexer_manifest WHERE name = $1`,
+        "SELECT config FROM __indexer_manifest WHERE name = $1",
         [name],
       );
       if (result.rows.length === 0) return null;
@@ -146,23 +145,24 @@ export async function createPGLiteIndexer(
       };
 
       const prefix = sanitizePrefix(name);
+      const docsTable = await createDocsTable(prefix);
 
       const fts = config.fulltext
-        ? new PGLiteFullTextIndex(db, prefix, {
+        ? new PGLiteFullTextIndex(db, prefix, docsTable, {
             language: config.fulltext.language,
             metadata: config.fulltext.metadata,
           })
         : null;
 
       const vec = config.vector
-        ? new PGLiteVectorIndex(db, prefix, {
+        ? new PGLiteVectorIndex(db, prefix, docsTable, {
             dimensionality: config.vector.dimensionality,
             model: config.vector.model,
             metadata: config.vector.metadata,
           })
         : null;
 
-      const index = new PGLiteIndex(name, fts, vec);
+      const index = new PGLiteIndex(name, db, docsTable, fts, vec);
       indexes.set(name, index);
       return index;
     },
@@ -183,11 +183,16 @@ export async function createPGLiteIndexer(
         const prefix = sanitizePrefix(name);
         await db.exec(`DROP TABLE IF EXISTS idx_${prefix}_fts`);
         await db.exec(`DROP TABLE IF EXISTS idx_${prefix}_vec`);
-        await db.query(`DELETE FROM __indexer_manifest WHERE name = $1`, [
+        await db.exec(`DROP TABLE IF EXISTS idx_${prefix}_docs`);
+        await db.query("DELETE FROM __indexer_manifest WHERE name = $1", [
           name,
         ]);
         manifest.delete(name);
       }
+    },
+
+    async flush(): Promise<void> {
+      ensureOpen();
     },
 
     async close(): Promise<void> {
