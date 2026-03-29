@@ -1,52 +1,49 @@
 import type { Indexer } from "@repo/indexer-api";
 import { describe, expect, it } from "vitest";
+import { collect } from "./test-utils.js";
 
 export function runMultiIndexerIsolationSuite(
   createIndexer: () => Promise<Indexer>,
 ): void {
   describe("Multi-Indexer Isolation", () => {
-    it("two independent indexers share no state", async () => {
-      const indexer1 = await createIndexer();
-      const indexer2 = await createIndexer();
-      try {
-        const idx1 = await indexer1.createIndex({
-          name: "test",
-          fulltext: { language: "en" },
-        });
-        await idx1.addDocument({ blockId: "a", content: "hello world" });
+    it("two indexers do not share state", async () => {
+      const a = await createIndexer();
+      const b = await createIndexer();
 
-        // indexer2 should not see indexer1's index
-        expect(await indexer2.hasIndex("test")).toBe(false);
-        expect(await indexer2.getIndex("test")).toBeNull();
-      } finally {
-        await indexer1.close();
-        await indexer2.close();
-      }
+      const indexA = await a.createIndex({
+        name: "test",
+        fulltext: { language: "en" },
+      });
+      await indexA.addDocument([
+        { path: "/test/1", blockId: "1", content: "only in A" },
+      ]);
+
+      expect(await b.hasIndex("test")).toBe(false);
+
+      await a.close();
+      await b.close();
     });
 
-    it("closing one indexer does not affect another", async () => {
-      const indexer1 = await createIndexer();
-      const indexer2 = await createIndexer();
-      try {
-        await indexer2.createIndex({
-          name: "survive",
-          fulltext: { language: "en" },
-        });
+    it("closing one indexer does not affect the other", async () => {
+      const a = await createIndexer();
+      const b = await createIndexer();
 
-        await indexer1.close();
+      const indexB = await b.createIndex({
+        name: "shared-name",
+        fulltext: { language: "en" },
+      });
+      await indexB.addDocument([
+        { path: "/test/1", blockId: "1", content: "hello from B" },
+      ]);
 
-        // indexer2 still works after indexer1 closed
-        expect(await indexer2.hasIndex("survive")).toBe(true);
-        const idx = await indexer2.getIndex("survive");
-        expect(idx).not.toBeNull();
-      } finally {
-        try {
-          await indexer1.close();
-        } catch {
-          // may already be closed
-        }
-        await indexer2.close();
-      }
+      await a.close();
+
+      const results = await collect(
+        indexB.search({ queries: ["hello"], topK: 10 }),
+      );
+      expect(results.length).toBeGreaterThan(0);
+
+      await b.close();
     });
   });
 }

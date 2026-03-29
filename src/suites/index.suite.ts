@@ -9,7 +9,7 @@ import {
   loadQueriesFixture,
   readFixtureDoc,
 } from "../fixtures/index.js";
-import { defined } from "./test-utils.js";
+import { collect, defined } from "./test-utils.js";
 
 export function runIndexSuite(getIndexer: () => Indexer): void {
   describe("Index", () => {
@@ -42,7 +42,7 @@ export function runIndexSuite(getIndexer: () => Indexer): void {
       expect(vecOnly.getVectorIndex()).not.toBeNull();
     });
 
-    it("addDocument with content only goes to FTS", async () => {
+    it("addDocument with content only goes to FTS sub-index", async () => {
       const indexer = getIndexer();
       const index = await indexer.createIndex({
         name: "test",
@@ -52,12 +52,16 @@ export function runIndexSuite(getIndexer: () => Indexer): void {
           model: EMBEDDING_MODEL,
         },
       });
-      await index.addDocument({ blockId: "1", content: "hello world" });
-      expect(await index.getFullTextIndex()?.hasDocument("1")).toBe(true);
-      expect(await index.getVectorIndex()?.hasDocument("1")).toBe(false);
+      await index.addDocument([
+        { path: "/test/doc1", blockId: "1", content: "hello world" },
+      ]);
+      const fts = defined(index.getFullTextIndex());
+      const vec = defined(index.getVectorIndex());
+      expect(await fts.getSize()).toBe(1);
+      expect(await vec.getSize()).toBe(0);
     });
 
-    it("addDocument with embedding only goes to vector", async () => {
+    it("addDocument with embedding only goes to vector sub-index", async () => {
       const indexer = getIndexer();
       const index = await indexer.createIndex({
         name: "test",
@@ -69,9 +73,13 @@ export function runIndexSuite(getIndexer: () => Indexer): void {
       });
       const embedding = new Float32Array(EMBEDDING_DIMENSIONS);
       embedding[0] = 1.0;
-      await index.addDocument({ blockId: "1", embedding });
-      expect(await index.getFullTextIndex()?.hasDocument("1")).toBe(false);
-      expect(await index.getVectorIndex()?.hasDocument("1")).toBe(true);
+      await index.addDocument([
+        { path: "/test/doc1", blockId: "1", embedding },
+      ]);
+      const fts = defined(index.getFullTextIndex());
+      const vec = defined(index.getVectorIndex());
+      expect(await fts.getSize()).toBe(0);
+      expect(await vec.getSize()).toBe(1);
     });
 
     it("addDocument with both goes to both sub-indexes", async () => {
@@ -86,9 +94,13 @@ export function runIndexSuite(getIndexer: () => Indexer): void {
       });
       const embedding = new Float32Array(EMBEDDING_DIMENSIONS);
       embedding[0] = 1.0;
-      await index.addDocument({ blockId: "1", content: "hello", embedding });
-      expect(await index.getFullTextIndex()?.hasDocument("1")).toBe(true);
-      expect(await index.getVectorIndex()?.hasDocument("1")).toBe(true);
+      await index.addDocument([
+        { path: "/test/doc1", blockId: "1", content: "hello", embedding },
+      ]);
+      const fts = defined(index.getFullTextIndex());
+      const vec = defined(index.getVectorIndex());
+      expect(await fts.getSize()).toBe(1);
+      expect(await vec.getSize()).toBe(1);
     });
 
     it("addDocument silently ignores content when no FTS sub-index", async () => {
@@ -101,7 +113,9 @@ export function runIndexSuite(getIndexer: () => Indexer): void {
         },
       });
       await expect(
-        index.addDocument({ blockId: "1", content: "hello" }),
+        index.addDocument([
+          { path: "/test/doc1", blockId: "1", content: "hello" },
+        ]),
       ).resolves.toBeUndefined();
     });
 
@@ -113,41 +127,55 @@ export function runIndexSuite(getIndexer: () => Indexer): void {
       });
       const embedding = new Float32Array(EMBEDDING_DIMENSIONS);
       await expect(
-        index.addDocument({ blockId: "1", embedding }),
+        index.addDocument([{ path: "/test/doc1", blockId: "1", embedding }]),
       ).resolves.toBeUndefined();
     });
 
-    it("search with query only returns FTS results", async () => {
+    it("search with queries returns FTS results", async () => {
       const indexer = getIndexer();
       const index = await indexer.createIndex({
         name: "test",
         fulltext: { language: "en" },
       });
-      await index.addDocument({ blockId: "1", content: "the quick brown fox" });
-      await index.addDocument({ blockId: "2", content: "lazy dog sleeps" });
-      const results = await index.search({ query: "fox", topK: 10 });
+      await index.addDocument([
+        { path: "/test/doc1", blockId: "1", content: "the quick brown fox" },
+      ]);
+      await index.addDocument([
+        { path: "/test/doc2", blockId: "2", content: "lazy dog sleeps" },
+      ]);
+      const results = await collect(
+        index.search({ queries: ["fox"], topK: 10 }),
+      );
       expect(results.length).toBeGreaterThan(0);
       expect(results[0]?.blockId).toBe("1");
     });
 
-    it("search with embedding only returns vector results", async () => {
+    it("search with embeddings returns vector results", async () => {
       const indexer = getIndexer();
       const index = await indexer.createIndex({
         name: "test",
         vector: { dimensionality: 3, model: "test" },
       });
-      await index.addDocument({
-        blockId: "1",
-        embedding: new Float32Array([1, 0, 0]),
-      });
-      await index.addDocument({
-        blockId: "2",
-        embedding: new Float32Array([0, 1, 0]),
-      });
-      const results = await index.search({
-        embedding: new Float32Array([1, 0, 0]),
-        topK: 10,
-      });
+      await index.addDocument([
+        {
+          path: "/test/doc1",
+          blockId: "1",
+          embedding: new Float32Array([1, 0, 0]),
+        },
+      ]);
+      await index.addDocument([
+        {
+          path: "/test/doc2",
+          blockId: "2",
+          embedding: new Float32Array([0, 1, 0]),
+        },
+      ]);
+      const results = await collect(
+        index.search({
+          embeddings: [new Float32Array([1, 0, 0])],
+          topK: 10,
+        }),
+      );
       expect(results.length).toBeGreaterThan(0);
       expect(results[0]?.blockId).toBe("1");
     });
@@ -173,11 +201,14 @@ export function runIndexSuite(getIndexer: () => Indexer): void {
       for (const [fileName, docBlocks] of Object.entries(blocks)) {
         for (const [, block] of Object.entries(docBlocks)) {
           const blockId = String(blockNum);
-          await index.addDocument({
-            blockId,
-            content: block.text,
-            embedding: new Float32Array(block.embedding),
-          });
+          await index.addDocument([
+            {
+              path: `/${fileName}` as `/${string}`,
+              blockId,
+              content: block.text,
+              embedding: new Float32Array(block.embedding),
+            },
+          ]);
           blockIdToFile.set(blockId, fileName);
           blockNum++;
         }
@@ -186,7 +217,13 @@ export function runIndexSuite(getIndexer: () => Indexer): void {
       for (const docName of docs) {
         const content = readFixtureDoc(docName);
         const blockId = String(blockNum);
-        await index.addDocument({ blockId, content });
+        await index.addDocument([
+          {
+            path: `/${docName}` as `/${string}`,
+            blockId,
+            content,
+          },
+        ]);
         blockIdToFile.set(blockId, docName);
         blockNum++;
       }
@@ -196,11 +233,13 @@ export function runIndexSuite(getIndexer: () => Indexer): void {
           queryEmbeddings[q.id],
           `missing embedding for query "${q.id}"`,
         );
-        const results = await index.search({
-          query: q.query,
-          embedding: new Float32Array(emb),
-          topK: 10,
-        });
+        const results = await collect(
+          index.search({
+            queries: [q.query],
+            embeddings: [new Float32Array(emb)],
+            topK: 10,
+          }),
+        );
         expect(
           results.length,
           `query "${q.id}" returned no results`,
@@ -215,58 +254,116 @@ export function runIndexSuite(getIndexer: () => Indexer): void {
       }
     });
 
-    it("hasDocument returns true if in any sub-index", async () => {
+    it("getSize returns total block count", async () => {
       const indexer = getIndexer();
       const index = await indexer.createIndex({
         name: "test",
         fulltext: { language: "en" },
         vector: { dimensionality: 3, model: "test" },
       });
-      await index.addDocument({ blockId: "1", content: "hello" });
-      await index.addDocument({
-        blockId: "2",
-        embedding: new Float32Array([1, 0, 0]),
-      });
-      expect(await index.hasDocument("1")).toBe(true);
-      expect(await index.hasDocument("2")).toBe(true);
-      expect(await index.hasDocument("3")).toBe(false);
-    });
-
-    it("getSize returns union count", async () => {
-      const indexer = getIndexer();
-      const index = await indexer.createIndex({
-        name: "test",
-        fulltext: { language: "en" },
-        vector: { dimensionality: 3, model: "test" },
-      });
-      await index.addDocument({
-        blockId: "1",
-        content: "hello",
-        embedding: new Float32Array([1, 0, 0]),
-      });
-      await index.addDocument({ blockId: "2", content: "world" });
-      await index.addDocument({
-        blockId: "3",
-        embedding: new Float32Array([0, 1, 0]),
-      });
+      await index.addDocument([
+        {
+          path: "/test/doc1",
+          blockId: "1",
+          content: "hello",
+          embedding: new Float32Array([1, 0, 0]),
+        },
+      ]);
+      await index.addDocument([
+        { path: "/test/doc2", blockId: "2", content: "world" },
+      ]);
+      await index.addDocument([
+        {
+          path: "/test/doc3",
+          blockId: "3",
+          embedding: new Float32Array([0, 1, 0]),
+        },
+      ]);
       expect(await index.getSize()).toBe(3);
     });
 
-    it("deleteDocument removes from all sub-indexes", async () => {
+    it("getSize with pathPrefix counts only matching blocks", async () => {
+      const indexer = getIndexer();
+      const index = await indexer.createIndex({
+        name: "test",
+        fulltext: { language: "en" },
+      });
+      await index.addDocument([
+        { path: "/science/physics", blockId: "1", content: "quantum" },
+      ]);
+      await index.addDocument([
+        { path: "/science/biology", blockId: "2", content: "cells" },
+      ]);
+      await index.addDocument([
+        { path: "/tech/code", blockId: "3", content: "typescript" },
+      ]);
+      expect(await index.getSize("/science/")).toBe(2);
+      expect(await index.getSize("/tech/")).toBe(1);
+      expect(await index.getSize()).toBe(3);
+    });
+
+    it("deleteDocuments removes from all sub-indexes", async () => {
       const indexer = getIndexer();
       const index = await indexer.createIndex({
         name: "test",
         fulltext: { language: "en" },
         vector: { dimensionality: 3, model: "test" },
       });
-      await index.addDocument({
-        blockId: "1",
-        content: "hello",
-        embedding: new Float32Array([1, 0, 0]),
-      });
-      await index.deleteDocument("1");
-      expect(await index.hasDocument("1")).toBe(false);
+      await index.addDocument([
+        {
+          path: "/test/doc1",
+          blockId: "1",
+          content: "hello",
+          embedding: new Float32Array([1, 0, 0]),
+        },
+      ]);
+      await index.deleteDocuments([{ path: "/test/doc1", blockId: "1" }]);
       expect(await index.getSize()).toBe(0);
+    });
+
+    it("deleteDocuments by path prefix removes all blocks under that path", async () => {
+      const indexer = getIndexer();
+      const index = await indexer.createIndex({
+        name: "test",
+        fulltext: { language: "en" },
+      });
+      await index.addDocument([
+        { path: "/docs/a", blockId: "1", content: "first" },
+      ]);
+      await index.addDocument([
+        { path: "/docs/b", blockId: "2", content: "second" },
+      ]);
+      await index.addDocument([
+        { path: "/other/c", blockId: "3", content: "third" },
+      ]);
+      await index.deleteDocuments([{ path: "/docs/" }]);
+      expect(await index.getSize()).toBe(1);
+    });
+
+    it("flush makes data durable without closing", async () => {
+      const indexer = getIndexer();
+      const index = await indexer.createIndex({
+        name: "test",
+        fulltext: { language: "en" },
+      });
+      await index.addDocument([
+        { path: "/test/1", blockId: "1", content: "flushed data" },
+      ]);
+      await expect(index.flush()).resolves.toBeUndefined();
+      expect(await index.getSize()).toBe(1);
+    });
+
+    it("deleteIndex clears all data", async () => {
+      const indexer = getIndexer();
+      const index = await indexer.createIndex({
+        name: "test",
+        fulltext: { language: "en" },
+      });
+      await index.addDocument([
+        { path: "/test/1", blockId: "1", content: "hello" },
+      ]);
+      await index.deleteIndex();
+      // After deleteIndex the index is unusable — just verify no throw
     });
   });
 }

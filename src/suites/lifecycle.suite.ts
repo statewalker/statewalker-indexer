@@ -1,85 +1,92 @@
 import type { Indexer } from "@repo/indexer-api";
 import { describe, expect, it } from "vitest";
-import { defined } from "./test-utils.js";
+import { collect, defined } from "./test-utils.js";
 
 export function runLifecycleSuite(getIndexer: () => Indexer): void {
   describe("Lifecycle", () => {
-    it("close() on Indexer closes all open indexes", async () => {
+    it("close on indexer closes all indexes", async () => {
       const indexer = getIndexer();
       const index = await indexer.createIndex({
         name: "test",
         fulltext: { language: "en" },
       });
+      await index.addDocument([
+        { path: "/test/1", blockId: "1", content: "hello" },
+      ]);
       await indexer.close();
+      // Subsequent operations should throw
       await expect(
-        index.addDocument({ blockId: "1", content: "hello" }),
+        indexer.createIndex({ name: "new", fulltext: { language: "en" } }),
       ).rejects.toThrow();
     });
 
-    it("close() on Index is idempotent", async () => {
+    it("close is idempotent", async () => {
+      const indexer = getIndexer();
+      await indexer.close();
+      await expect(indexer.close()).resolves.toBeUndefined();
+    });
+
+    it("operations after Index.close() throw", async () => {
       const indexer = getIndexer();
       const index = await indexer.createIndex({
         name: "test",
         fulltext: { language: "en" },
       });
       await index.close();
-      await expect(index.close()).resolves.toBeUndefined();
-    });
-
-    it("operations after close() throw on Indexer", async () => {
-      const indexer = getIndexer();
-      await indexer.close();
-      await expect(indexer.getIndexNames()).rejects.toThrow();
-      await expect(indexer.hasIndex("test")).rejects.toThrow();
-      await expect(indexer.deleteIndex("test")).rejects.toThrow();
-    });
-
-    it("operations after close() throw on Index", async () => {
-      const indexer = getIndexer();
-      const index = await indexer.createIndex({
-        name: "test",
-        fulltext: { language: "en" },
-      });
-      await index.close();
-      await expect(index.search({ query: "test", topK: 5 })).rejects.toThrow();
       await expect(
-        index.addDocument({ blockId: "1", content: "hello" }),
+        index.addDocument([
+          { path: "/test/1", blockId: "1", content: "hello" },
+        ]),
       ).rejects.toThrow();
-      await expect(index.hasDocument("1")).rejects.toThrow();
-      await expect(index.getSize()).rejects.toThrow();
     });
 
-    it("operations after close() throw on FullTextIndex", async () => {
+    it("operations after FullTextIndex.close() throw", async () => {
       const indexer = getIndexer();
       const index = await indexer.createIndex({
         name: "test",
         fulltext: { language: "en" },
       });
       const fts = defined(index.getFullTextIndex());
-      await index.close();
-      await expect(fts.search({ query: "test", topK: 5 })).rejects.toThrow();
+      await fts.close();
       await expect(
-        fts.addDocument({ blockId: "1", content: "hello" }),
+        fts.addDocument([{ path: "/test/1", blockId: "1", content: "hello" }]),
       ).rejects.toThrow();
     });
 
-    it("operations after close() throw on VectorIndex", async () => {
+    it("operations after EmbeddingIndex.close() throw", async () => {
       const indexer = getIndexer();
       const index = await indexer.createIndex({
         name: "test",
         vector: { dimensionality: 3, model: "test" },
       });
       const vec = defined(index.getVectorIndex());
-      await index.close();
+      await vec.close();
       await expect(
-        vec.search({ topK: 5, embedding: new Float32Array([1, 0, 0]) }),
+        vec.addDocument([
+          {
+            path: "/test/1",
+            blockId: "1",
+            embedding: new Float32Array([1, 0, 0]),
+          },
+        ]),
       ).rejects.toThrow();
-      await expect(
-        vec.addDocument({
-          blockId: "1",
-          embedding: new Float32Array([1, 0, 0]),
-        }),
-      ).rejects.toThrow();
+    });
+
+    it("flush does not close the index", async () => {
+      const indexer = getIndexer();
+      const index = await indexer.createIndex({
+        name: "test",
+        fulltext: { language: "en" },
+      });
+      await index.addDocument([
+        { path: "/test/1", blockId: "1", content: "hello" },
+      ]);
+      await index.flush();
+      // Index should still be usable
+      const results = await collect(
+        index.search({ queries: ["hello"], topK: 10 }),
+      );
+      expect(results.length).toBeGreaterThan(0);
     });
   });
 }

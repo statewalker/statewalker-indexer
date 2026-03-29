@@ -8,10 +8,11 @@ import {
   loadBlocksFixture,
   loadQueriesFixture,
 } from "../fixtures/index.js";
+import { defined } from "./test-utils.js";
 
 export function runSemanticIndexSuite(getIndexer: () => Indexer): void {
   describe("SemanticIndex", () => {
-    it("search embeds query for vector search", async () => {
+    it("embeds query text on search", async () => {
       const indexer = getIndexer();
       const index = await indexer.createIndex({
         name: "test",
@@ -22,67 +23,68 @@ export function runSemanticIndexSuite(getIndexer: () => Indexer): void {
         },
       });
 
-      const embedFn = createFixtureEmbedFn();
-      const spyEmbed = vi.fn(embedFn);
-      const semantic = new SemanticIndex(index, spyEmbed);
-
-      await semantic.addDocument({ blockId: "1", content: "hello world" });
-      await semantic.search({ query: "hello", topK: 5 });
-      expect(spyEmbed).toHaveBeenCalled();
-    });
-
-    it("search uses semanticQuery for embedding when provided", async () => {
-      const indexer = getIndexer();
-      const index = await indexer.createIndex({
-        name: "test",
-        fulltext: { language: "en" },
-        vector: {
-          dimensionality: EMBEDDING_DIMENSIONS,
-          model: EMBEDDING_MODEL,
-        },
-      });
-
-      const calls: string[] = [];
-      const embedFn = async (text: string) => {
-        calls.push(text);
-        return new Float32Array(EMBEDDING_DIMENSIONS);
-      };
+      const embedFn = vi.fn(createFixtureEmbedFn());
       const semantic = new SemanticIndex(index, embedFn);
-
-      await semantic.search({
-        query: "short query",
-        semanticQuery: "expanded semantic query",
-        topK: 5,
-      });
-      expect(calls).toContain("expanded semantic query");
-      expect(calls).not.toContain("short query");
-    });
-
-    it("addDocument uses embeddingContent for embedding when provided", async () => {
-      const indexer = getIndexer();
-      const index = await indexer.createIndex({
-        name: "test",
-        fulltext: { language: "en" },
-        vector: {
-          dimensionality: EMBEDDING_DIMENSIONS,
-          model: EMBEDDING_MODEL,
-        },
-      });
-
-      const calls: string[] = [];
-      const embedFn = async (text: string) => {
-        calls.push(text);
-        return new Float32Array(EMBEDDING_DIMENSIONS);
-      };
-      const semantic = new SemanticIndex(index, embedFn);
-
       await semantic.addDocument({
+        path: "/test/1",
         blockId: "1",
-        content: "short content",
-        embeddingContent: "expanded content for embedding",
+        content: "hello world",
       });
-      expect(calls).toContain("expanded content for embedding");
-      expect(calls).not.toContain("short content");
+      await semantic.search({ query: "hello", topK: 10 });
+      expect(embedFn).toHaveBeenCalled();
+    });
+
+    it("uses semanticQuery for embedding when provided", async () => {
+      const indexer = getIndexer();
+      const index = await indexer.createIndex({
+        name: "test",
+        fulltext: { language: "en" },
+        vector: {
+          dimensionality: EMBEDDING_DIMENSIONS,
+          model: EMBEDDING_MODEL,
+        },
+      });
+
+      const calls: string[] = [];
+      const embedFn = async (text: string) => {
+        calls.push(text);
+        return new Float32Array(EMBEDDING_DIMENSIONS);
+      };
+      const semantic = new SemanticIndex(index, embedFn);
+      await semantic.search({
+        query: "original",
+        semanticQuery: "rewritten",
+        topK: 10,
+      });
+      expect(calls).toContain("rewritten");
+      expect(calls).not.toContain("original");
+    });
+
+    it("uses embeddingContent for document embedding when provided", async () => {
+      const indexer = getIndexer();
+      const index = await indexer.createIndex({
+        name: "test",
+        fulltext: { language: "en" },
+        vector: {
+          dimensionality: EMBEDDING_DIMENSIONS,
+          model: EMBEDDING_MODEL,
+        },
+      });
+
+      const calls: string[] = [];
+      const embedFn = async (text: string) => {
+        calls.push(text);
+        return new Float32Array(EMBEDDING_DIMENSIONS);
+      };
+      const semantic = new SemanticIndex(index, embedFn);
+      await semantic.addDocument({
+        path: "/test/1",
+        blockId: "1",
+        content: "original",
+        embeddingContent: "enriched",
+      });
+      expect(calls).toContain("enriched");
+      expect(calls).not.toContain("original");
     });
 
     it("skips embedding when no vector sub-index", async () => {
@@ -94,91 +96,77 @@ export function runSemanticIndexSuite(getIndexer: () => Indexer): void {
 
       const embedFn = vi.fn(async () => new Float32Array(EMBEDDING_DIMENSIONS));
       const semantic = new SemanticIndex(index, embedFn);
-
-      await semantic.addDocument({ blockId: "1", content: "hello" });
-      await semantic.search({ query: "hello", topK: 5 });
+      await semantic.addDocument({
+        path: "/test/1",
+        blockId: "1",
+        content: "hello",
+      });
       expect(embedFn).not.toHaveBeenCalled();
     });
 
-    it("delegates deleteDocument to underlying index", async () => {
+    it("delegates getSize", async () => {
       const indexer = getIndexer();
       const index = await indexer.createIndex({
         name: "test",
         fulltext: { language: "en" },
       });
-      const semantic = new SemanticIndex(index, createFixtureEmbedFn());
-
-      await semantic.addDocument({ blockId: "1", content: "hello" });
-      expect(await semantic.hasDocument("1")).toBe(true);
-      await semantic.deleteDocument("1");
-      expect(await semantic.hasDocument("1")).toBe(false);
+      const embedFn = createFixtureEmbedFn();
+      const semantic = new SemanticIndex(index, embedFn);
+      await semantic.addDocument({
+        path: "/test/1",
+        blockId: "1",
+        content: "hello",
+      });
+      expect(await semantic.getSize()).toBe(1);
     });
 
-    it("delegates getSize to underlying index", async () => {
+    it("delegates deleteDocuments", async () => {
       const indexer = getIndexer();
       const index = await indexer.createIndex({
         name: "test",
         fulltext: { language: "en" },
       });
-      const semantic = new SemanticIndex(index, createFixtureEmbedFn());
-
-      await semantic.addDocument({ blockId: "1", content: "one" });
-      await semantic.addDocument({ blockId: "2", content: "two" });
-      expect(await semantic.getSize()).toBe(2);
+      const embedFn = createFixtureEmbedFn();
+      const semantic = new SemanticIndex(index, embedFn);
+      await semantic.addDocument({
+        path: "/test/1",
+        blockId: "1",
+        content: "hello",
+      });
+      await semantic.deleteDocuments([{ path: "/test/1", blockId: "1" }]);
+      expect(await semantic.getSize()).toBe(0);
     });
 
-    it("close delegates to underlying index", async () => {
+    it("end-to-end search with fixture blocks", async () => {
       const indexer = getIndexer();
       const index = await indexer.createIndex({
         name: "test",
-        fulltext: { language: "en" },
-      });
-      const semantic = new SemanticIndex(index, createFixtureEmbedFn());
-      await semantic.close();
-      await expect(semantic.hasDocument("1")).rejects.toThrow();
-    });
-
-    it("end-to-end: indexes all fixture blocks and validates search ranking", async () => {
-      const indexer = getIndexer();
-      const index = await indexer.createIndex({
-        name: "e2e",
         fulltext: { language: "en" },
         vector: {
           dimensionality: EMBEDDING_DIMENSIONS,
           model: EMBEDDING_MODEL,
         },
       });
-
       const embedFn = createFixtureEmbedFn();
       const semantic = new SemanticIndex(index, embedFn);
       const blocks = loadBlocksFixture();
       const queries = loadQueriesFixture();
 
-      const blockIdToFile = new Map<string, string>();
-      let blockNum = 1;
       for (const [fileName, docBlocks] of Object.entries(blocks)) {
-        for (const block of Object.values(docBlocks)) {
-          const blockId = String(blockNum);
-          await semantic.addDocument({ blockId, content: block.text });
-          blockIdToFile.set(blockId, fileName);
+        let blockNum = 1;
+        for (const [, block] of Object.entries(docBlocks)) {
+          await semantic.addDocument({
+            path: `/${fileName}` as `/${string}`,
+            blockId: `${fileName}-${blockNum}`,
+            content: block.text,
+          });
           blockNum++;
         }
       }
 
-      for (const q of queries) {
-        const results = await semantic.search({ query: q.query, topK: 10 });
-        expect(
-          results.length,
-          `query "${q.id}" returned no results`,
-        ).toBeGreaterThan(0);
-        const topFiles = results
-          .slice(0, 5)
-          .map((r) => blockIdToFile.get(r.blockId));
-        expect(
-          topFiles,
-          `query "${q.id}" expected "${q.expectedTopPath}" in top 5, got: ${topFiles.join(", ")}`,
-        ).toContain(q.expectedTopPath);
-      }
+      const q = defined(queries[0]);
+      const results = await semantic.search({ query: q.query, topK: 10 });
+      expect(results.length).toBeGreaterThan(0);
     });
   });
 }

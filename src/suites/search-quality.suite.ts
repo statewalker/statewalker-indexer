@@ -1,49 +1,20 @@
 import type { Indexer } from "@repo/indexer-api";
 import { describe, expect, it } from "vitest";
 import {
-  createFixtureEmbedFn,
   EMBEDDING_DIMENSIONS,
   EMBEDDING_MODEL,
   loadBlocksFixture,
   loadQueriesEmbeddingsFixture,
   loadQueriesFixture,
 } from "../fixtures/index.js";
-
-/**
- * Compute Hit@K: fraction of queries where the expected doc appears in top K results.
- */
-function hitAtK(
-  results: Map<string, string[]>,
-  queries: Array<{ id: string; expectedTopPath: string }>,
-  k: number,
-): number {
-  let hits = 0;
-  for (const q of queries) {
-    const topK = results.get(q.id)?.slice(0, k) ?? [];
-    if (topK.some((blockId) => blockId.startsWith(q.expectedTopPath))) {
-      hits++;
-    }
-  }
-  return queries.length > 0 ? hits / queries.length : 0;
-}
+import { collect } from "./test-utils.js";
 
 export function runSearchQualitySuite(getIndexer: () => Indexer): void {
-  describe("Search Quality Evaluation", () => {
-    let ftsResults: Map<string, string[]>;
-    let vectorResults: Map<string, string[]>;
-    let hybridResults: Map<string, string[]>;
-    let queries: Array<{ id: string; expectedTopPath: string; expectedTopics: string[] }>;
-    let indexed = false;
-
-    async function ensureIndexed(indexer: Indexer): Promise<void> {
-      if (indexed) return;
-
+  describe("Search Quality", () => {
+    async function indexFixtureBlocks(indexer: Indexer) {
       const blocks = loadBlocksFixture();
-      queries = loadQueriesFixture();
-      const queriesEmbeddings = loadQueriesEmbeddingsFixture();
-
       const index = await indexer.createIndex({
-        name: "eval",
+        name: "quality",
         fulltext: { language: "en" },
         vector: {
           dimensionality: EMBEDDING_DIMENSIONS,
@@ -51,104 +22,159 @@ export function runSearchQualitySuite(getIndexer: () => Indexer): void {
         },
       });
 
-      // Add all blocks from all fixture docs
-      for (const [docPath, docBlocks] of Object.entries(blocks)) {
-        for (const [blockKey, block] of Object.entries(docBlocks)) {
-          const blockId = `${docPath}/block-${blockKey}`;
-          await index.addDocument({
-            blockId,
-            content: block.text,
-            embedding: new Float32Array(block.embedding),
-          });
+      const blockIdToFile = new Map<string, string>();
+      let blockNum = 1;
+      for (const [fileName, docBlocks] of Object.entries(blocks)) {
+        for (const [, block] of Object.entries(docBlocks)) {
+          const blockId = String(blockNum);
+          await index.addDocument([
+            {
+              path: `/${fileName}` as `/${string}`,
+              blockId,
+              content: block.text,
+              embedding: new Float32Array(block.embedding),
+            },
+          ]);
+          blockIdToFile.set(blockId, fileName);
+          blockNum++;
         }
       }
 
-      // Run all queries across FTS, vector, and hybrid
-      ftsResults = new Map();
-      vectorResults = new Map();
-      hybridResults = new Map();
-
-      for (const q of queries) {
-        const queryEmbedding = queriesEmbeddings[q.id];
-        const embeddingArray = queryEmbedding
-          ? new Float32Array(queryEmbedding)
-          : undefined;
-
-        // FTS only
-        const ftsHits = await index.search({
-          query: q.query,
-          topK: 10,
-          weights: { fts: 1, embedding: 0 },
-        });
-        ftsResults.set(
-          q.id,
-          ftsHits.map((r) => r.blockId),
-        );
-
-        // Vector only
-        if (embeddingArray) {
-          const vecHits = await index.search({
-            embedding: embeddingArray,
-            topK: 10,
-            weights: { fts: 0, embedding: 1 },
-          });
-          vectorResults.set(
-            q.id,
-            vecHits.map((r) => r.blockId),
-          );
-        }
-
-        // Hybrid
-        const hybridHits = await index.search({
-          query: q.query,
-          embedding: embeddingArray,
-          topK: 10,
-        });
-        hybridResults.set(
-          q.id,
-          hybridHits.map((r) => r.blockId),
-        );
-      }
-
-      indexed = true;
+      return { index, blockIdToFile };
     }
 
-    it("FTS Hit@1 >= 40%", async () => {
-      await ensureIndexed(getIndexer());
-      const score = hitAtK(ftsResults, queries, 1);
-      expect(score).toBeGreaterThanOrEqual(0.4);
+    it("FTS Hit@1 >= 40% and Hit@3 >= 60%", async () => {
+      const indexer = getIndexer();
+      const { index, blockIdToFile } = await indexFixtureBlocks(indexer);
+      const queries = loadQueriesFixture();
+
+      let hit1 = 0;
+      let hit3 = 0;
+      for (const q of queries) {
+        const results = await collect(
+          index.search({
+            queries: [q.query],
+            topK: 10,
+            weights: { fts: 1, embedding: 0 },
+          }),
+        );
+        const topFiles = results.map((r) => blockIdToFile.get(r.blockId));
+        if (topFiles[0] === q.expectedTopPath) hit1++;
+        if (topFiles.slice(0, 3).includes(q.expectedTopPath)) hit3++;
+      }
+
+      const rate1 = hit1 / queries.length;
+      const rate3 = hit3 / queries.length;
+      expect(
+        rate1,
+        `FTS Hit@1 = ${(rate1 * 100).toFixed(0)}%`,
+      ).toBeGreaterThanOrEqual(0.4);
+      expect(
+        rate3,
+        `FTS Hit@3 = ${(rate3 * 100).toFixed(0)}%`,
+      ).toBeGreaterThanOrEqual(0.6);
     });
 
-    it("FTS Hit@3 >= 60%", async () => {
-      await ensureIndexed(getIndexer());
-      const score = hitAtK(ftsResults, queries, 3);
-      expect(score).toBeGreaterThanOrEqual(0.6);
-    });
+    it("Vector Hit@1 >= 30% and Hit@3 >= 50%", async () => {
+      const indexer = getIndexer();
+      const { index, blockIdToFile } = await indexFixtureBlocks(indexer);
+      const queries = loadQueriesFixture();
+      const queryEmbeddings = loadQueriesEmbeddingsFixture();
 
-    it("Vector Hit@1 >= 30%", async () => {
-      await ensureIndexed(getIndexer());
-      const score = hitAtK(vectorResults, queries, 1);
-      expect(score).toBeGreaterThanOrEqual(0.3);
-    });
+      let hit1 = 0;
+      let hit3 = 0;
+      for (const q of queries) {
+        const emb = queryEmbeddings[q.id];
+        if (!emb) continue;
+        const results = await collect(
+          index.search({
+            embeddings: [new Float32Array(emb)],
+            topK: 10,
+            weights: { fts: 0, embedding: 1 },
+          }),
+        );
+        const topFiles = results.map((r) => blockIdToFile.get(r.blockId));
+        if (topFiles[0] === q.expectedTopPath) hit1++;
+        if (topFiles.slice(0, 3).includes(q.expectedTopPath)) hit3++;
+      }
 
-    it("Vector Hit@3 >= 50%", async () => {
-      await ensureIndexed(getIndexer());
-      const score = hitAtK(vectorResults, queries, 3);
-      expect(score).toBeGreaterThanOrEqual(0.5);
+      const rate1 = hit1 / queries.length;
+      const rate3 = hit3 / queries.length;
+      expect(
+        rate1,
+        `Vec Hit@1 = ${(rate1 * 100).toFixed(0)}%`,
+      ).toBeGreaterThanOrEqual(0.3);
+      expect(
+        rate3,
+        `Vec Hit@3 = ${(rate3 * 100).toFixed(0)}%`,
+      ).toBeGreaterThanOrEqual(0.5);
     });
 
     it("Hybrid Hit@3 >= max(FTS, Vector) Hit@3", async () => {
-      await ensureIndexed(getIndexer());
-      const ftsScore = hitAtK(ftsResults, queries, 3);
-      const vecScore = hitAtK(vectorResults, queries, 3);
-      const hybridScore = hitAtK(hybridResults, queries, 3);
-      expect(hybridScore).toBeGreaterThanOrEqual(Math.max(ftsScore, vecScore));
-    });
+      const indexer = getIndexer();
+      const { index, blockIdToFile } = await indexFixtureBlocks(indexer);
+      const queries = loadQueriesFixture();
+      const queryEmbeddings = loadQueriesEmbeddingsFixture();
 
-    it("Hybrid Hit@3 >= 50%", async () => {
-      await ensureIndexed(getIndexer());
-      const score = hitAtK(hybridResults, queries, 3);
-      expect(score).toBeGreaterThanOrEqual(0.5);
+      let ftsHit3 = 0;
+      let vecHit3 = 0;
+      let hybridHit3 = 0;
+
+      for (const q of queries) {
+        const emb = queryEmbeddings[q.id];
+        if (!emb) continue;
+
+        // FTS only
+        const ftsResults = await collect(
+          index.search({
+            queries: [q.query],
+            topK: 10,
+            weights: { fts: 1, embedding: 0 },
+          }),
+        );
+        if (
+          ftsResults
+            .slice(0, 3)
+            .some((r) => blockIdToFile.get(r.blockId) === q.expectedTopPath)
+        )
+          ftsHit3++;
+
+        // Vector only
+        const vecResults = await collect(
+          index.search({
+            embeddings: [new Float32Array(emb)],
+            topK: 10,
+            weights: { fts: 0, embedding: 1 },
+          }),
+        );
+        if (
+          vecResults
+            .slice(0, 3)
+            .some((r) => blockIdToFile.get(r.blockId) === q.expectedTopPath)
+        )
+          vecHit3++;
+
+        // Hybrid
+        const hybridResults = await collect(
+          index.search({
+            queries: [q.query],
+            embeddings: [new Float32Array(emb)],
+            topK: 10,
+          }),
+        );
+        if (
+          hybridResults
+            .slice(0, 3)
+            .some((r) => blockIdToFile.get(r.blockId) === q.expectedTopPath)
+        )
+          hybridHit3++;
+      }
+
+      const best = Math.max(ftsHit3, vecHit3);
+      expect(
+        hybridHit3,
+        `Hybrid Hit@3 (${hybridHit3}) should >= max(FTS=${ftsHit3}, Vec=${vecHit3})`,
+      ).toBeGreaterThanOrEqual(best);
     });
   });
 }

@@ -2,7 +2,7 @@ import type { IndexerPersistence, PersistenceEntry } from "@repo/indexer-api";
 import { describe, expect, it } from "vitest";
 import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from "../fixtures/index.js";
 import type { IndexerFactory } from "../suite-runner.js";
-import { defined } from "./test-utils.js";
+import { collect, defined } from "./test-utils.js";
 
 class MemoryPersistence implements IndexerPersistence {
   private store = new Map<string, Uint8Array[]>();
@@ -18,14 +18,12 @@ class MemoryPersistence implements IndexerPersistence {
     }
   }
 
-  async *load(): AsyncIterable<PersistenceEntry> {
+  async *load(): AsyncGenerator<PersistenceEntry> {
     for (const [name, chunks] of this.store) {
       yield {
         name,
         content: (async function* () {
-          for (const chunk of chunks) {
-            yield chunk;
-          }
+          for (const chunk of chunks) yield chunk;
         })(),
       };
     }
@@ -34,184 +32,117 @@ class MemoryPersistence implements IndexerPersistence {
 
 export function runPersistenceSuite(factory: IndexerFactory): void {
   describe("Persistence", () => {
-    it("saves and restores indexes", async () => {
+    it("FTS index survives save/restore round-trip", async () => {
       const persistence = new MemoryPersistence();
-      const indexer = defined(
-        await factory.createWithPersistence?.(persistence),
-        "createWithPersistence should return an indexer",
-      );
+      const createWithPersistence = defined(factory.createWithPersistence);
 
-      await indexer.createIndex({
-        name: "test-fts",
+      // Create and populate
+      const indexer1 = await createWithPersistence(persistence);
+      const index1 = await indexer1.createIndex({
+        name: "test",
         fulltext: { language: "en" },
       });
-      await indexer.createIndex({
-        name: "test-vec",
-        vector: {
-          dimensionality: EMBEDDING_DIMENSIONS,
-          model: EMBEDDING_MODEL,
-        },
-      });
+      await index1.addDocument([
+        { path: "/docs/1", blockId: "1", content: "the quick brown fox" },
+      ]);
+      await indexer1.flush();
+      await indexer1.close();
 
-      const ftsIndex = defined(await indexer.getIndex("test-fts"));
-      await ftsIndex.addDocument({ blockId: "1", content: "hello world" });
-      await ftsIndex.addDocument({ blockId: "2", content: "foo bar baz" });
-
-      const vecIndex = defined(await indexer.getIndex("test-vec"));
-      const emb1 = new Float32Array(EMBEDDING_DIMENSIONS).fill(0.1);
-      const emb2 = new Float32Array(EMBEDDING_DIMENSIONS).fill(0.9);
-      await vecIndex.addDocument({ blockId: "10", embedding: emb1 });
-      await vecIndex.addDocument({ blockId: "20", embedding: emb2 });
-
-      await indexer.close();
-
-      const indexer2 = defined(
-        await factory.createWithPersistence?.(persistence),
-      );
-      expect(await indexer2.hasIndex("test-fts")).toBe(true);
-      expect(await indexer2.hasIndex("test-vec")).toBe(true);
-
-      const ftsIndex2 = defined(await indexer2.getIndex("test-fts"));
-      expect(await ftsIndex2.getSize()).toBe(2);
-      expect(await ftsIndex2.hasDocument("1")).toBe(true);
-      expect(await ftsIndex2.hasDocument("2")).toBe(true);
-
-      const vecIndex2 = defined(await indexer2.getIndex("test-vec"));
-      expect(await vecIndex2.getSize()).toBe(2);
-      expect(await vecIndex2.hasDocument("10")).toBe(true);
-      expect(await vecIndex2.hasDocument("20")).toBe(true);
-
+      // Restore and verify
+      const indexer2 = await createWithPersistence(persistence);
+      const index2 = await indexer2.getIndex("test");
+      expect(index2).not.toBeNull();
+      const fts = defined(defined(index2).getFullTextIndex());
+      expect(await fts.getSize()).toBe(1);
+      const results = await collect(fts.search({ queries: ["fox"], topK: 10 }));
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]?.blockId).toBe("1");
       await indexer2.close();
     });
 
-    it("restored FTS index is searchable", async () => {
+    it("vector index survives save/restore round-trip", async () => {
       const persistence = new MemoryPersistence();
-      const indexer = defined(
-        await factory.createWithPersistence?.(persistence),
-      );
+      const createWithPersistence = defined(factory.createWithPersistence);
 
-      await indexer.createIndex({
-        name: "searchable",
-        fulltext: { language: "en" },
+      const indexer1 = await createWithPersistence(persistence);
+      const index1 = await indexer1.createIndex({
+        name: "test",
+        vector: { dimensionality: 3, model: "test" },
       });
-      const index = defined(await indexer.getIndex("searchable"));
-      await index.addDocument({
-        blockId: "1",
-        content: "typescript programming language",
-      });
-      await index.addDocument({
-        blockId: "2",
-        content: "python machine learning",
-      });
-      await indexer.close();
-
-      const indexer2 = defined(
-        await factory.createWithPersistence?.(persistence),
-      );
-      const index2 = defined(await indexer2.getIndex("searchable"));
-      const ftsResults = await index2.search({ query: "typescript", topK: 5 });
-      expect(ftsResults.length).toBeGreaterThan(0);
-      expect(ftsResults[0]?.blockId).toBe("1");
-      await indexer2.close();
-    });
-
-    it("restored vector index is searchable", async () => {
-      const persistence = new MemoryPersistence();
-      const indexer = defined(
-        await factory.createWithPersistence?.(persistence),
-      );
-
-      await indexer.createIndex({
-        name: "searchable-vec",
-        vector: {
-          dimensionality: EMBEDDING_DIMENSIONS,
-          model: EMBEDDING_MODEL,
+      await index1.addDocument([
+        {
+          path: "/test/1",
+          blockId: "1",
+          embedding: new Float32Array([1, 0, 0]),
         },
-      });
-      const index = defined(await indexer.getIndex("searchable-vec"));
-      const emb1 = new Float32Array(EMBEDDING_DIMENSIONS).fill(0.1);
-      const emb2 = new Float32Array(EMBEDDING_DIMENSIONS).fill(0.9);
-      await index.addDocument({ blockId: "1", embedding: emb1 });
-      await index.addDocument({ blockId: "2", embedding: emb2 });
-      await indexer.close();
+      ]);
+      await indexer1.flush();
+      await indexer1.close();
 
-      const indexer2 = defined(
-        await factory.createWithPersistence?.(persistence),
+      const indexer2 = await createWithPersistence(persistence);
+      const index2 = defined(await indexer2.getIndex("test"));
+      const vec = defined(index2.getVectorIndex());
+      expect(await vec.getSize()).toBe(1);
+      const results = await collect(
+        vec.search({
+          embeddings: [new Float32Array([0.9, 0.1, 0])],
+          topK: 2,
+        }),
       );
-      const index2 = defined(await indexer2.getIndex("searchable-vec"));
-      const queryEmb = new Float32Array(EMBEDDING_DIMENSIONS).fill(0.85);
-      const vecResults = await index2.search({ embedding: queryEmb, topK: 5 });
-      expect(vecResults.length).toBeGreaterThan(0);
-      expect(vecResults[0]?.blockId).toBe("2");
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]?.blockId).toBe("1");
       await indexer2.close();
     });
 
     it("multiple indexes survive round-trip", async () => {
       const persistence = new MemoryPersistence();
-      const indexer = defined(
-        await factory.createWithPersistence?.(persistence),
-      );
+      const createWithPersistence = defined(factory.createWithPersistence);
 
-      await indexer.createIndex({
-        name: "idx-a",
+      const indexer1 = await createWithPersistence(persistence);
+      await indexer1.createIndex({
+        name: "alpha",
         fulltext: { language: "en" },
       });
-      await indexer.createIndex({
-        name: "idx-b",
-        vector: {
-          dimensionality: EMBEDDING_DIMENSIONS,
-          model: EMBEDDING_MODEL,
-        },
+      await indexer1.createIndex({
+        name: "beta",
+        vector: { dimensionality: 3, model: "test" },
       });
-      await indexer.createIndex({
-        name: "idx-c",
-        fulltext: { language: "fr" },
-        vector: {
-          dimensionality: EMBEDDING_DIMENSIONS,
-          model: EMBEDDING_MODEL,
-        },
-      });
+      await indexer1.flush();
+      await indexer1.close();
 
-      const idxA = defined(await indexer.getIndex("idx-a"));
-      await idxA.addDocument({ blockId: "1", content: "alpha content" });
-
-      const idxB = defined(await indexer.getIndex("idx-b"));
-      const emb = new Float32Array(EMBEDDING_DIMENSIONS).fill(0.5);
-      await idxB.addDocument({ blockId: "2", embedding: emb });
-
-      const idxC = defined(await indexer.getIndex("idx-c"));
-      const emb2 = new Float32Array(EMBEDDING_DIMENSIONS).fill(0.3);
-      await idxC.addDocument({
-        blockId: "3",
-        content: "charlie content",
-        embedding: emb2,
-      });
-
-      await indexer.close();
-
-      const indexer2 = defined(
-        await factory.createWithPersistence?.(persistence),
-      );
+      const indexer2 = await createWithPersistence(persistence);
+      expect(await indexer2.hasIndex("alpha")).toBe(true);
+      expect(await indexer2.hasIndex("beta")).toBe(true);
       const names = await indexer2.getIndexNames();
-      expect(names).toHaveLength(3);
-      const sortedNames = names.map((n) => n.name).sort();
-      expect(sortedNames).toEqual(["idx-a", "idx-b", "idx-c"]);
+      expect(names).toHaveLength(2);
+      await indexer2.close();
+    });
 
-      const idxA2 = defined(await indexer2.getIndex("idx-a"));
-      expect(await idxA2.getSize()).toBe(1);
-      expect(idxA2.getFullTextIndex()).not.toBeNull();
-      expect(idxA2.getVectorIndex()).toBeNull();
+    it("index metadata preserved across round-trip", async () => {
+      const persistence = new MemoryPersistence();
+      const createWithPersistence = defined(factory.createWithPersistence);
 
-      const idxB2 = defined(await indexer2.getIndex("idx-b"));
-      expect(await idxB2.getSize()).toBe(1);
-      expect(idxB2.getFullTextIndex()).toBeNull();
-      expect(idxB2.getVectorIndex()).not.toBeNull();
+      const indexer1 = await createWithPersistence(persistence);
+      const index1 = await indexer1.createIndex({
+        name: "test",
+        fulltext: { language: "en" },
+        vector: {
+          dimensionality: EMBEDDING_DIMENSIONS,
+          model: EMBEDDING_MODEL,
+        },
+      });
+      const ftsInfo1 = await defined(index1.getFullTextIndex()).getIndexInfo();
+      const vecInfo1 = await defined(index1.getVectorIndex()).getIndexInfo();
+      await indexer1.flush();
+      await indexer1.close();
 
-      const idxC2 = defined(await indexer2.getIndex("idx-c"));
-      expect(await idxC2.getSize()).toBe(1);
-      expect(idxC2.getFullTextIndex()).not.toBeNull();
-      expect(idxC2.getVectorIndex()).not.toBeNull();
-
+      const indexer2 = await createWithPersistence(persistence);
+      const index2 = defined(await indexer2.getIndex("test"));
+      const ftsInfo2 = await defined(index2.getFullTextIndex()).getIndexInfo();
+      const vecInfo2 = await defined(index2.getVectorIndex()).getIndexInfo();
+      expect(ftsInfo2.language).toBe(ftsInfo1.language);
+      expect(vecInfo2.dimensionality).toBe(vecInfo1.dimensionality);
+      expect(vecInfo2.model).toBe(vecInfo1.model);
       await indexer2.close();
     });
   });

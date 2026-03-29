@@ -1,8 +1,7 @@
 import type { Indexer, IndexerPersistence } from "@repo/indexer-api";
 import { afterEach, beforeEach, describe } from "vitest";
 import { runBatchOperationsSuite } from "./suites/batch-operations.suite.js";
-import { runCollectionPrefixSuite } from "./suites/collection-prefix.suite.js";
-import { runCollectionsSuite } from "./suites/collections.suite.js";
+import { runDocumentPathsSuite } from "./suites/document-paths.suite.js";
 import { runErrorHandlingSuite } from "./suites/error-handling.suite.js";
 import { runFullTextIndexSuite } from "./suites/full-text-index.suite.js";
 import { runIndexSuite } from "./suites/index.suite.js";
@@ -46,11 +45,10 @@ export function runIndexerTestSuite(
     runIndexSuite(() => indexer);
     runFullTextIndexSuite(() => indexer);
     runVectorIndexSuite(() => indexer);
+    runDocumentPathsSuite(() => indexer);
     runSemanticIndexSuite(() => indexer);
     runBatchOperationsSuite(() => indexer);
     runLifecycleSuite(() => indexer);
-    runCollectionsSuite(() => indexer);
-    runCollectionPrefixSuite(() => indexer);
     runErrorHandlingSuite(() => indexer);
 
     runSearchQualitySuite(() => indexer);

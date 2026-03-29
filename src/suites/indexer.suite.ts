@@ -57,7 +57,9 @@ export function runIndexerSuite(getIndexer: () => Indexer): void {
         name: "test",
         fulltext: { language: "en" },
       });
-      await first.addDocument({ blockId: "1", content: "hello" });
+      await first.addDocument([
+        { path: "/test/doc1", blockId: "1", content: "hello" },
+      ]);
       const second = await indexer.createIndex({
         name: "test",
         fulltext: { language: "en" },
