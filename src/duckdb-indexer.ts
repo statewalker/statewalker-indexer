@@ -13,10 +13,6 @@ export interface DuckDbIndexerOptions {
   db: Db;
 }
 
-/**
- * Sanitize an index name to produce a safe SQL identifier prefix.
- * Replaces non-alphanumeric characters with underscores.
- */
 function sanitizePrefix(name: string): string {
   return name.replace(/[^a-zA-Z0-9]/g, (ch) => `_${ch.charCodeAt(0)}_`);
 }
@@ -29,19 +25,15 @@ export async function createDuckDbIndexer(
   const manifest = new Map<string, IndexInfo>();
   let closed = false;
 
-  // Load VSS extension for vector search with HNSW indexes
-  await db.exec(`INSTALL vss; LOAD vss;`);
-  // Enable HNSW persistence for file-based databases
-  await db.exec(`SET hnsw_enable_experimental_persistence = true;`);
+  await db.exec("INSTALL vss; LOAD vss;");
+  await db.exec("SET hnsw_enable_experimental_persistence = true;");
 
-  // Create manifest table
   await db.exec(
-    `CREATE TABLE IF NOT EXISTS __indexer_manifest (name TEXT PRIMARY KEY, config TEXT NOT NULL)`,
+    "CREATE TABLE IF NOT EXISTS __indexer_manifest (name TEXT PRIMARY KEY, config TEXT NOT NULL)",
   );
 
-  // Load existing manifest entries
   const existingEntries = await db.query<{ name: string; config: string }>(
-    `SELECT name, config FROM __indexer_manifest`,
+    "SELECT name, config FROM __indexer_manifest",
   );
   for (const entry of existingEntries) {
     manifest.set(entry.name, { name: entry.name });
@@ -51,6 +43,19 @@ export async function createDuckDbIndexer(
     if (closed) {
       throw new Error("Indexer is closed");
     }
+  }
+
+  async function createDocsTable(prefix: string): Promise<string> {
+    const docsTable = `idx_${prefix}_docs`;
+    await db.exec(
+      `CREATE TABLE IF NOT EXISTS ${docsTable} (doc_id INTEGER PRIMARY KEY DEFAULT(nextval('${docsTable}_seq')), path TEXT NOT NULL UNIQUE)`,
+    );
+    return docsTable;
+  }
+
+  async function ensureDocsSequence(prefix: string): Promise<void> {
+    const seqName = `idx_${prefix}_docs_seq`;
+    await db.exec(`CREATE SEQUENCE IF NOT EXISTS ${seqName} START 1`);
   }
 
   const indexer: Indexer = {
@@ -70,15 +75,14 @@ export async function createDuckDbIndexer(
       if (indexes.has(name) || manifest.has(name)) {
         if (overwrite) {
           const old = indexes.get(name);
-          if (old) {
-            await old.close();
-          }
+          if (old) await old.close();
           indexes.delete(name);
           manifest.delete(name);
-          // Drop existing tables
           const prefix = sanitizePrefix(name);
           await db.exec(`DROP TABLE IF EXISTS idx_${prefix}_fts`);
           await db.exec(`DROP TABLE IF EXISTS idx_${prefix}_vec`);
+          await db.exec(`DROP TABLE IF EXISTS idx_${prefix}_docs`);
+          await db.exec(`DROP SEQUENCE IF EXISTS idx_${prefix}_docs_seq`);
           await db.exec(
             `DELETE FROM __indexer_manifest WHERE name = '${name.replace(/'/g, "''")}'`,
           );
@@ -88,16 +92,18 @@ export async function createDuckDbIndexer(
       }
 
       const prefix = sanitizePrefix(name);
+      await ensureDocsSequence(prefix);
+      const docsTable = await createDocsTable(prefix);
 
       const fts = fulltext
-        ? new DuckDbFullTextIndex(db, prefix, {
+        ? new DuckDbFullTextIndex(db, prefix, docsTable, {
             language: fulltext.language,
             metadata: fulltext.metadata,
           })
         : null;
 
       const vec = vector
-        ? new DuckDbVectorIndex(db, prefix, {
+        ? new DuckDbVectorIndex(db, prefix, docsTable, {
             dimensionality: vector.dimensionality,
             model: vector.model,
             metadata: vector.metadata,
@@ -109,11 +115,11 @@ export async function createDuckDbIndexer(
 
       const config = JSON.stringify({ fulltext, vector });
       await db.query(
-        `INSERT INTO __indexer_manifest (name, config) VALUES ($1, $2)`,
+        "INSERT INTO __indexer_manifest (name, config) VALUES ($1, $2)",
         [name, config],
       );
 
-      const index = new DuckDbIndex(name, fts, vec);
+      const index = new DuckDbIndex(name, db, docsTable, fts, vec);
       indexes.set(name, index);
       manifest.set(name, { name });
 
@@ -129,9 +135,8 @@ export async function createDuckDbIndexer(
         return null;
       }
 
-      // Reconstruct index from manifest
       const rows = await db.query<{ config: string }>(
-        `SELECT config FROM __indexer_manifest WHERE name = $1`,
+        "SELECT config FROM __indexer_manifest WHERE name = $1",
         [name],
       );
       if (rows.length === 0) return null;
@@ -146,23 +151,25 @@ export async function createDuckDbIndexer(
       };
 
       const prefix = sanitizePrefix(name);
+      await ensureDocsSequence(prefix);
+      const docsTable = await createDocsTable(prefix);
 
       const fts = config.fulltext
-        ? new DuckDbFullTextIndex(db, prefix, {
+        ? new DuckDbFullTextIndex(db, prefix, docsTable, {
             language: config.fulltext.language,
             metadata: config.fulltext.metadata,
           })
         : null;
 
       const vec = config.vector
-        ? new DuckDbVectorIndex(db, prefix, {
+        ? new DuckDbVectorIndex(db, prefix, docsTable, {
             dimensionality: config.vector.dimensionality,
             model: config.vector.model,
             metadata: config.vector.metadata,
           })
         : null;
 
-      const index = new DuckDbIndex(name, fts, vec);
+      const index = new DuckDbIndex(name, db, docsTable, fts, vec);
       indexes.set(name, index);
       return index;
     },
@@ -183,11 +190,17 @@ export async function createDuckDbIndexer(
         const prefix = sanitizePrefix(name);
         await db.exec(`DROP TABLE IF EXISTS idx_${prefix}_fts`);
         await db.exec(`DROP TABLE IF EXISTS idx_${prefix}_vec`);
+        await db.exec(`DROP TABLE IF EXISTS idx_${prefix}_docs`);
+        await db.exec(`DROP SEQUENCE IF EXISTS idx_${prefix}_docs_seq`);
         await db.exec(
           `DELETE FROM __indexer_manifest WHERE name = '${name.replace(/'/g, "''")}'`,
         );
         manifest.delete(name);
       }
+    },
+
+    async flush(): Promise<void> {
+      ensureOpen();
     },
 
     async close(): Promise<void> {

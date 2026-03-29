@@ -1,31 +1,38 @@
 import type { Db } from "@repo/db";
-import {
-  type BlockId,
-  buildCollectionClause,
-  type CollectionFilter,
-  type CollectionId,
-  DEFAULT_COLLECTION,
-  type FullTextIndex,
-  type FullTextIndexInfo,
-  type Metadata,
-  type SearchResult,
+import type {
+  BlockReference,
+  DocumentPath,
+  FullTextBlock,
+  FullTextIndex,
+  FullTextIndexInfo,
+  FullTextSearchParams,
+  FullTextSearchResult,
+  Metadata,
+  PathSelector,
 } from "@repo/indexer-api";
 
 export class DuckDbFullTextIndex implements FullTextIndex {
   private readonly db: Db;
-  private readonly tableName: string;
+  readonly tableName: string;
+  private readonly docsTable: string;
   private readonly info: FullTextIndexInfo;
   private closed = false;
 
-  constructor(db: Db, prefix: string, info: FullTextIndexInfo) {
+  constructor(
+    db: Db,
+    prefix: string,
+    docsTable: string,
+    info: FullTextIndexInfo,
+  ) {
     this.db = db;
     this.tableName = `idx_${prefix}_fts`;
+    this.docsTable = docsTable;
     this.info = info;
   }
 
   async init(): Promise<void> {
     await this.db.exec(
-      `CREATE TABLE IF NOT EXISTS ${this.tableName} (collection_id TEXT NOT NULL DEFAULT '${DEFAULT_COLLECTION}', block_id TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT, PRIMARY KEY (collection_id, block_id))`,
+      `CREATE TABLE IF NOT EXISTS ${this.tableName} (doc_id INTEGER NOT NULL, block_id TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT, PRIMARY KEY (doc_id, block_id))`,
     );
   }
 
@@ -35,177 +42,154 @@ export class DuckDbFullTextIndex implements FullTextIndex {
     }
   }
 
+  private async resolveDocId(path: DocumentPath): Promise<number> {
+    await this.db.query(
+      `INSERT INTO ${this.docsTable} (path) VALUES ($1) ON CONFLICT (path) DO NOTHING`,
+      [path],
+    );
+    const rows = await this.db.query<{ doc_id: number }>(
+      `SELECT doc_id FROM ${this.docsTable} WHERE path = $1`,
+      [path],
+    );
+    return rows[0]?.doc_id ?? -1;
+  }
+
+  private pathFilterClause(
+    paths: DocumentPath[] | undefined,
+    paramOffset: number,
+  ): { sql: string; params: string[] } {
+    if (!paths || paths.length === 0) return { sql: "", params: [] };
+    const conditions = paths.map(
+      (_, i) => `d.path LIKE $${paramOffset + i} || '%'`,
+    );
+    return {
+      sql: ` AND (${conditions.join(" OR ")})`,
+      params: paths as string[],
+    };
+  }
+
   async getIndexInfo(): Promise<FullTextIndexInfo> {
     this.ensureOpen();
     return { ...this.info };
   }
 
-  async deleteIndex(): Promise<void> {
+  async *search(
+    params: FullTextSearchParams,
+  ): AsyncGenerator<FullTextSearchResult> {
     this.ensureOpen();
-    this.closed = true;
-    await this.db.exec(`DROP TABLE IF EXISTS ${this.tableName}`);
-  }
+    const { queries, topK, paths } = params;
 
-  async search(params: {
-    query: string;
-    topK: number;
-    collections?: CollectionFilter;
-  }): Promise<SearchResult[]> {
-    this.ensureOpen();
+    if (!queries || queries.length === 0) return;
 
-    const words = params.query
-      .toLowerCase()
-      .split(/\s+/)
-      .filter((w) => w.length > 0);
+    const bestScores = new Map<string, FullTextSearchResult>();
 
-    if (words.length === 0) return [];
+    for (const query of queries) {
+      const words = query
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((w) => w.length > 0);
+      if (words.length === 0) continue;
 
-    const likeParams = words.map((w) => `%${w}%`);
+      const likeParams = words.map((w) => `%${w}%`);
+      const conditions = words.map((_, i) => `LOWER(b.content) LIKE $${i + 1}`);
+      const scoreExpr = words
+        .map(
+          (_, i) =>
+            `CASE WHEN LOWER(b.content) LIKE $${i + 1} THEN 1 ELSE 0 END`,
+        )
+        .join(" + ");
 
-    const conditions = words.map((_, i) => `LOWER(content) LIKE $${i + 1}`);
-    const scoreExpr = words
-      .map(
-        (_, i) => `CASE WHEN LOWER(content) LIKE $${i + 1} THEN 1 ELSE 0 END`,
-      )
-      .join(" + ");
+      const allParams: (string | number)[] = [...likeParams];
 
-    let collClause = "";
-    const allParams: (string | number | string[])[] = [...likeParams];
+      const pathFilter = this.pathFilterClause(paths, allParams.length + 1);
+      allParams.push(...pathFilter.params);
 
-    const collFilter = buildCollectionClause(
-      params.collections,
-      words.length + 1,
-    );
-    if (collFilter) {
-      collClause = ` AND ${collFilter.sql}`;
-      allParams.push(...collFilter.params);
+      const topKParam = `$${allParams.length + 1}`;
+      allParams.push(topK);
+
+      const sql = `SELECT d.path, b.block_id, b.content, (${scoreExpr}) AS match_count FROM ${this.tableName} b JOIN ${this.docsTable} d ON d.doc_id = b.doc_id WHERE (${conditions.join(" OR ")})${pathFilter.sql} ORDER BY match_count DESC LIMIT ${topKParam}`;
+
+      const rows = await this.db.query<{
+        path: string;
+        block_id: string;
+        content: string;
+        match_count: number;
+      }>(sql, allParams);
+
+      for (let rank = 0; rank < rows.length; rank++) {
+        const row = rows[rank];
+        if (!row) continue;
+        const key = `${row.path}\0${row.block_id}`;
+        const score =
+          (row.match_count / words.length) * (1 - rank / (rows.length + 1));
+        const existing = bestScores.get(key);
+        if (!existing || score > existing.score) {
+          bestScores.set(key, {
+            path: row.path as DocumentPath,
+            blockId: row.block_id,
+            snippet: row.content,
+            score,
+          });
+        }
+      }
     }
 
-    const topKParam = `$${allParams.length + 1}`;
-    allParams.push(params.topK);
-
-    const sql = `SELECT block_id, collection_id, (${scoreExpr}) AS match_count FROM ${this.tableName} WHERE (${conditions.join(" OR ")})${collClause} ORDER BY match_count DESC LIMIT ${topKParam}`;
-
-    const rows = await this.db.query<{
-      block_id: string;
-      collection_id: string;
-      match_count: number;
-    }>(sql, allParams);
-
-    const includeCollectionId = params.collections !== undefined;
-    return rows.map((row, rank) => ({
-      blockId: row.block_id,
-      score: (row.match_count / words.length) * (1 - rank / (rows.length + 1)),
-      ...(includeCollectionId ? { collectionId: row.collection_id } : {}),
-    }));
+    const sorted = [...bestScores.values()].sort((a, b) => b.score - a.score);
+    for (const r of sorted.slice(0, topK)) {
+      yield r;
+    }
   }
 
-  async addDocument(params: {
-    blockId: BlockId;
-    content: string;
-    metadata?: Metadata;
-    collectionId?: CollectionId;
-  }): Promise<void> {
+  async addDocument(blocks: FullTextBlock[]): Promise<void> {
     this.ensureOpen();
-    const cid = params.collectionId ?? DEFAULT_COLLECTION;
-    const metaJson = params.metadata ? JSON.stringify(params.metadata) : null;
-
-    await this.db.query(
-      `DELETE FROM ${this.tableName} WHERE collection_id = $1 AND block_id = $2`,
-      [cid, params.blockId],
-    );
-    await this.db.query(
-      `INSERT INTO ${this.tableName} (collection_id, block_id, content, metadata) VALUES ($1, $2, $3, $4)`,
-      [cid, params.blockId, params.content, metaJson],
-    );
+    for (const block of blocks) {
+      const docId = await this.resolveDocId(block.path);
+      const metaJson = block.metadata ? JSON.stringify(block.metadata) : null;
+      await this.db.query(
+        `DELETE FROM ${this.tableName} WHERE doc_id = $1 AND block_id = $2`,
+        [docId, block.blockId],
+      );
+      await this.db.query(
+        `INSERT INTO ${this.tableName} (doc_id, block_id, content, metadata) VALUES ($1, $2, $3, $4)`,
+        [docId, block.blockId, block.content, metaJson],
+      );
+    }
   }
 
   async addDocuments(
-    docs:
-      | Iterable<{
-          blockId: BlockId;
-          content: string;
-          metadata?: Metadata;
-          collectionId?: CollectionId;
-        }>
-      | AsyncIterable<{
-          blockId: BlockId;
-          content: string;
-          metadata?: Metadata;
-          collectionId?: CollectionId;
-        }>,
+    blocks: Iterable<FullTextBlock[]> | AsyncIterable<FullTextBlock[]>,
   ): Promise<void> {
     this.ensureOpen();
-    for await (const doc of docs as AsyncIterable<{
-      blockId: BlockId;
-      content: string;
-      metadata?: Metadata;
-      collectionId?: CollectionId;
-    }>) {
-      await this.addDocument(doc);
-    }
-  }
-
-  async deleteDocument(
-    blockId: BlockId,
-    collectionId?: CollectionId,
-  ): Promise<void> {
-    this.ensureOpen();
-    if (collectionId !== undefined) {
-      await this.db.query(
-        `DELETE FROM ${this.tableName} WHERE collection_id = $1 AND block_id = $2`,
-        [collectionId, blockId],
-      );
-    } else {
-      await this.db.query(`DELETE FROM ${this.tableName} WHERE block_id = $1`, [
-        blockId,
-      ]);
+    for await (const batch of blocks) {
+      await this.addDocument(batch);
     }
   }
 
   async deleteDocuments(
-    blockIds: Iterable<BlockId> | AsyncIterable<BlockId>,
-    collectionId?: CollectionId,
+    pathSelectors: PathSelector[] | AsyncIterable<PathSelector>,
   ): Promise<void> {
     this.ensureOpen();
-    for await (const blockId of blockIds as AsyncIterable<BlockId>) {
-      await this.deleteDocument(blockId, collectionId);
+    for await (const sel of pathSelectors as AsyncIterable<PathSelector>) {
+      if (sel.blockId !== undefined) {
+        await this.db.query(
+          `DELETE FROM ${this.tableName} WHERE doc_id IN (SELECT doc_id FROM ${this.docsTable} WHERE path = $1) AND block_id = $2`,
+          [sel.path, sel.blockId],
+        );
+      } else {
+        await this.db.query(
+          `DELETE FROM ${this.tableName} WHERE doc_id IN (SELECT doc_id FROM ${this.docsTable} WHERE path LIKE $1 || '%')`,
+          [sel.path],
+        );
+      }
     }
   }
 
-  async deleteCollection(collectionId: CollectionId): Promise<void> {
+  async getSize(pathPrefix?: DocumentPath): Promise<number> {
     this.ensureOpen();
-    await this.db.query(
-      `DELETE FROM ${this.tableName} WHERE collection_id = $1`,
-      [collectionId],
-    );
-  }
-
-  async hasDocument(
-    blockId: BlockId,
-    collectionId?: CollectionId,
-  ): Promise<boolean> {
-    this.ensureOpen();
-    if (collectionId !== undefined) {
+    if (pathPrefix !== undefined) {
       const rows = await this.db.query<{ cnt: number | bigint }>(
-        `SELECT COUNT(*) AS cnt FROM ${this.tableName} WHERE collection_id = $1 AND block_id = $2`,
-        [collectionId, blockId],
-      );
-      return Number(rows[0]?.cnt ?? 0) > 0;
-    }
-    const rows = await this.db.query<{ cnt: number | bigint }>(
-      `SELECT COUNT(*) AS cnt FROM ${this.tableName} WHERE block_id = $1`,
-      [blockId],
-    );
-    return Number(rows[0]?.cnt ?? 0) > 0;
-  }
-
-  async getSize(collectionId?: CollectionId): Promise<number> {
-    this.ensureOpen();
-    if (collectionId !== undefined) {
-      const rows = await this.db.query<{ cnt: number | bigint }>(
-        `SELECT COUNT(*) AS cnt FROM ${this.tableName} WHERE collection_id = $1`,
-        [collectionId],
+        `SELECT COUNT(*) AS cnt FROM ${this.tableName} b JOIN ${this.docsTable} d ON d.doc_id = b.doc_id WHERE d.path LIKE $1 || '%'`,
+        [pathPrefix],
       );
       return Number(rows[0]?.cnt ?? 0);
     }
@@ -215,15 +199,77 @@ export class DuckDbFullTextIndex implements FullTextIndex {
     return Number(rows[0]?.cnt ?? 0);
   }
 
-  async getCollections(): Promise<CollectionId[]> {
+  async *getDocumentPaths(
+    pathPrefix?: DocumentPath,
+  ): AsyncGenerator<DocumentPath> {
     this.ensureOpen();
-    const rows = await this.db.query<{ collection_id: string }>(
-      `SELECT DISTINCT collection_id FROM ${this.tableName}`,
-    );
-    return rows.map((r) => r.collection_id);
+    const sql =
+      pathPrefix !== undefined
+        ? `SELECT DISTINCT d.path FROM ${this.tableName} b JOIN ${this.docsTable} d ON d.doc_id = b.doc_id WHERE d.path LIKE $1 || '%'`
+        : `SELECT DISTINCT d.path FROM ${this.tableName} b JOIN ${this.docsTable} d ON d.doc_id = b.doc_id`;
+    const params = pathPrefix !== undefined ? [pathPrefix] : [];
+    const rows = await this.db.query<{ path: string }>(sql, params);
+    for (const row of rows) {
+      yield row.path as DocumentPath;
+    }
   }
 
-  async close(): Promise<void> {
+  async *getDocumentBlocksRefs(
+    pathPrefix?: DocumentPath,
+  ): AsyncGenerator<BlockReference> {
+    this.ensureOpen();
+    const sql =
+      pathPrefix !== undefined
+        ? `SELECT d.path, b.block_id FROM ${this.tableName} b JOIN ${this.docsTable} d ON d.doc_id = b.doc_id WHERE d.path LIKE $1 || '%'`
+        : `SELECT d.path, b.block_id FROM ${this.tableName} b JOIN ${this.docsTable} d ON d.doc_id = b.doc_id`;
+    const params = pathPrefix !== undefined ? [pathPrefix] : [];
+    const rows = await this.db.query<{ path: string; block_id: string }>(
+      sql,
+      params,
+    );
+    for (const row of rows) {
+      yield { path: row.path as DocumentPath, blockId: row.block_id };
+    }
+  }
+
+  async *getDocumentsBlocks(
+    pathPrefix?: DocumentPath,
+  ): AsyncGenerator<FullTextBlock> {
+    this.ensureOpen();
+    const sql =
+      pathPrefix !== undefined
+        ? `SELECT d.path, b.block_id, b.content, b.metadata FROM ${this.tableName} b JOIN ${this.docsTable} d ON d.doc_id = b.doc_id WHERE d.path LIKE $1 || '%'`
+        : `SELECT d.path, b.block_id, b.content, b.metadata FROM ${this.tableName} b JOIN ${this.docsTable} d ON d.doc_id = b.doc_id`;
+    const params = pathPrefix !== undefined ? [pathPrefix] : [];
+    const rows = await this.db.query<{
+      path: string;
+      block_id: string;
+      content: string;
+      metadata: string | null;
+    }>(sql, params);
+    for (const row of rows) {
+      yield {
+        path: row.path as DocumentPath,
+        blockId: row.block_id,
+        content: row.content,
+        metadata: row.metadata
+          ? (JSON.parse(row.metadata) as Metadata)
+          : undefined,
+      };
+    }
+  }
+
+  async close(_options?: { force?: boolean }): Promise<void> {
     this.closed = true;
+  }
+
+  async flush(): Promise<void> {
+    this.ensureOpen();
+  }
+
+  async deleteIndex(): Promise<void> {
+    this.ensureOpen();
+    this.closed = true;
+    await this.db.exec(`DROP TABLE IF EXISTS ${this.tableName}`);
   }
 }
