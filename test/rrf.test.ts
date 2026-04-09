@@ -7,7 +7,7 @@ import {
   buildRrfTrace,
   type RankedList,
   reciprocalRankFusion,
-} from "../rrf.js";
+} from "../src/rrf.js";
 
 // ---------------------------------------------------------------------------
 // Helpers

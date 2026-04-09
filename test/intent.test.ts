@@ -3,7 +3,7 @@
  * by Tobi Lutke. MIT License — Copyright (c) 2024-2026 Tobi Lutke.
  */
 import { describe, expect, it } from "vitest";
-import { extractIntentTerms, selectBestChunk } from "../intent.js";
+import { extractIntentTerms, selectBestChunk } from "../src/intent.js";
 
 describe("extractIntentTerms", () => {
   it("filters common stop words (the, a, is, of, in, to, and, for, with, on, at, by, an, or)", () => {

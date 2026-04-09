@@ -104,6 +104,14 @@ interface IndexerPersistence {
 
 `SemanticIndex` wraps an `Index` and an `EmbedFn` to automatically compute embeddings at ingestion and search time. Application code provides plain text; the wrapper handles embedding generation transparently.
 
+### SearchPipeline
+
+`SearchPipeline` is a builder/executor for multi-stage search with optional LLM-powered stages. It chains: **expand** (query expansion) → **embed** (semantic query embedding) → **search** (single `index.search()` call) → **rerank** (score blending) → **cite** (citation extraction). Each LLM stage is defined as a function type (`QueryExpanderFn`, `RerankerFn`, `CitationBuilderFn`) — no class instantiation required, just pass closures.
+
+### indexDocuments utility
+
+`indexDocuments()` is a convenience function for batch document ingestion with optional auto-embedding. It accepts a sync or async iterable of documents and an optional `embedFn`, and returns a count of indexed documents.
+
 ## Implementations / backends
 
 | Package | Backend | Notes |
@@ -118,7 +126,6 @@ Supporting packages:
 
 | Package | Purpose |
 |---------|---------|
-| `@repo/indexer-llm` | Search pipeline with LLM query expansion, reranking, and citation building |
 | `@repo/indexer-chunker` | Markdown splitting and code fence detection for content preprocessing |
 
 ## How to use
@@ -231,17 +238,50 @@ const parsed = parseStructuredQuery("lex: CAP theorem\nvec: consensus algorithms
 // [{ type: "lex", query: "CAP theorem" }, { type: "vec", query: "consensus algorithms" }]
 ```
 
+### SearchPipeline
+
+```ts
+import { SearchPipeline } from "@repo/indexer-api";
+
+const results = await new SearchPipeline({
+  index,
+  embedFn: embed,
+  expander: async (query) => [
+    { type: "lex", query },
+    { type: "vec", query: `semantic: ${query}` },
+  ],
+  reranker: async (query, candidates) =>
+    candidates.map((c, i) => ({ blockId: c.blockId, score: 1 / (i + 1) })),
+})
+  .setPrompt("distributed consensus")
+  .setTopK(10)
+  .execute();
+```
+
+### Batch indexing with indexDocuments
+
+```ts
+import { indexDocuments } from "@repo/indexer-api";
+
+const { indexed } = await indexDocuments(index, [
+  { path: "/docs/", blockId: "b1", content: "First document..." },
+  { path: "/docs/", blockId: "b2", content: "Second document..." },
+], { embedFn: embed });
+```
+
 ## How it is tested
 
-Tests use **vitest** and live in `src/__tests__/`. The package has **5 test suites** covering the pure-logic modules:
+Tests use **vitest** and live in `test/`, mirroring the `src/` structure. The package has **7 test suites** covering the pure-logic modules:
 
 | Test file | What it covers |
 |-----------|----------------|
-| `rrf.test.ts` | RRF score computation, weighted lists, top-rank bonuses, trace correctness |
-| `reranker-blend.test.ts` | Position-aware blending, tier boundaries, re-ordering, custom tiers, edge cases |
-| `query-parser.test.ts` | Structured query parsing (`lex:/vec:/hyde:/expand:`), validation, error cases |
-| `intent.test.ts` | Stop-word filtering, intent term extraction, chunk selection with intent weighting |
-| `collection-filter.test.ts` | Path-prefix matching, exact matching, prefix resolution, SQL clause generation |
+| `test/rrf.test.ts` | RRF score computation, weighted lists, top-rank bonuses, trace correctness |
+| `test/reranker-blend.test.ts` | Position-aware blending, tier boundaries, re-ordering, custom tiers, edge cases |
+| `test/query-parser.test.ts` | Structured query parsing (`lex:/vec:/hyde:/expand:`), validation, error cases |
+| `test/intent.test.ts` | Stop-word filtering, intent term extraction, chunk selection with intent weighting |
+| `test/helpers/search-pipeline.test.ts` | SearchPipeline builder, FTS execution, expansion, reranking, citations, explain traces, error handling |
+| `test/helpers/mock.test.ts` | Mock expander, reranker, and citation builder factory functions |
+| `test/helpers/index-documents.test.ts` | Batch indexing utility with sync/async iterables and auto-embedding |
 
 The interface types (`Indexer`, `Index`, `FullTextIndex`, `EmbeddingIndex`) are not tested here — they are pure TypeScript interfaces with no runtime behavior. Each backend package (`indexer-mem`, `indexer-pglite`, `indexer-duckdb`, etc.) has its own integration test suite that validates conformance to these interfaces.
 

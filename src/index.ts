@@ -1,4 +1,22 @@
 export type {
+  Citation,
+  CitationBuilderFn,
+  EntryExplain,
+  ExpandedQuery,
+  PipelineConfig,
+  PipelineEntry,
+  QueryExpanderFn,
+  RerankerFn,
+  RerankResult,
+} from "./helpers/index.js";
+export {
+  createMockCitationBuilder,
+  createMockExpander,
+  createMockReranker,
+  indexDocuments,
+  SearchPipeline,
+} from "./helpers/index.js";
+export type {
   CreateIndexParams,
   Indexer,
   IndexInfo,

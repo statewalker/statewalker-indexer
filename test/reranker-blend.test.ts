@@ -3,8 +3,8 @@ import {
   type BlendTier,
   blendWithReranker,
   DEFAULT_BLEND_TIERS,
-} from "../reranker-blend.js";
-import type { ScoredItem } from "../rrf.js";
+} from "../src/reranker-blend.js";
+import type { ScoredItem } from "../src/rrf.js";
 
 describe("blendWithReranker", () => {
   // ---------------------------------------------------------------------------

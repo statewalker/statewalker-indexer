@@ -24,6 +24,7 @@
     "format:check": "biome format ."
   },
   "devDependencies": {
+    "@repo/indexer-mem-flexsearch": "workspace:*",
     "tsdown": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

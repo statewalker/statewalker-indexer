@@ -44,6 +44,19 @@ export interface MultiSearchResult extends ScoredItem {
 /**
  * Multi-query search utility that fans out individual queries/embeddings
  * to the index, fuses results with RRF, and tracks matchCount.
+ *
+ * This provides **cross-query RRF**: each query/embedding is run as a
+ * separate `index.search()` call, producing independent ranked lists that
+ * are then fused with {@link reciprocalRankFusion}. Blocks appearing in
+ * multiple lists get boosted.
+ *
+ * This differs from calling `index.search()` directly with multiple
+ * queries/embeddings, where the index handles multi-query fusion internally
+ * (typically best-score-per-block merge within each modality, then
+ * FTS/embedding blending). Use this function when you specifically need
+ * cross-query rank fusion; use `index.search()` directly when you want
+ * the index implementation to optimise multi-query handling natively
+ * (e.g. SQL-level merges in DuckDB/PostgreSQL).
  */
 export async function defaultMultiSearch(
   index: Index,
