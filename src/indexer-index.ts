@@ -55,7 +55,7 @@ export type Metadata = Record<string, unknown>;
 
 /**
  * Uniquely identifies a single block in the index by its document path
- * and block id. Used in search results and for point lookups / deletions.
+ * and block id. Used in search results and for point lookups / selections.
  */
 export type BlockReference = {
   /** Document this block belongs to. */
@@ -65,16 +65,16 @@ export type BlockReference = {
 };
 
 /**
- * Selector for bulk deletion. Identifies documents by a path prefix and,
+ * Selector for bulk selection. Identifies documents by a path prefix and,
  * optionally, a specific block within those documents.
  *
- * - If only `path` is provided, all blocks under that path prefix are deleted.
- * - If `blockId` is also provided, only the matching block is deleted.
+ * - If only `path` is provided, all blocks under that path prefix are selected.
+ * - If `blockId` is also provided, only the matching block is selected.
  */
 export type PathSelector = {
   /** Path prefix selecting the target documents. */
   path: DocumentPath;
-  /** Optional specific block to delete; when omitted all blocks under `path` are removed. */
+  /** Optional specific block to select; when omitted all blocks under `path` are selected. */
   blockId?: BlockId;
 };
 
