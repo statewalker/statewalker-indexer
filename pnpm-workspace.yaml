@@ -1,0 +1,16 @@
+packages:
+  - "packages/*"
+  - "apps/*"
+
+catalog:
+  "@biomejs/biome": "^2.3.5"
+  "@types/node": "^22.19.11"
+  "@vitest/coverage-v8": "^3.2.4"
+  flexsearch: "^0.8.212"
+  minisearch: "^7.2.0"
+  rimraf: "^6.0.1"
+  tsdown: "^0.12.3"
+  tsx: "^4.21.0"
+  turbo: "^2.9.6"
+  typescript: "^5.8.3"
+  vitest: "^3.2.4"
