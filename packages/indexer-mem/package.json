@@ -33,7 +33,7 @@
   },
   "dependencies": {
     "@statewalker/indexer-api": "workspace:*",
-    "@uwdata/flechette": "^2.3.0"
+    "@uwdata/flechette": "catalog:"
   },
   "devDependencies": {
     "rimraf": "catalog:",

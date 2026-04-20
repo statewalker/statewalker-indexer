@@ -34,7 +34,7 @@
   "dependencies": {
     "@statewalker/indexer-api": "workspace:*",
     "@statewalker/indexer-mem": "workspace:*",
-    "flexsearch": "^0.7.43"
+    "flexsearch": "catalog:"
   },
   "devDependencies": {
     "@statewalker/indexer-tests": "workspace:*",

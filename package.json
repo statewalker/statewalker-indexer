@@ -16,7 +16,7 @@
   },
   "scripts": {
     "build": "turbo run build",
-    "test": "turbo run test",
+    "test": "pnpm -r --filter \"./packages/*\" run test",
     "typecheck": "turbo run typecheck",
     "lint": "biome check --write .",
     "lint:check": "biome check .",
@@ -29,10 +29,10 @@
   },
   "devDependencies": {
     "@biomejs/biome": "catalog:",
-    "@changesets/cli": "^2.30.0",
+    "@changesets/cli": "catalog:",
     "@types/node": "catalog:",
     "tsx": "catalog:",
-    "turbo": "^2.9.6",
+    "turbo": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   },
