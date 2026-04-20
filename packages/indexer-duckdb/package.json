@@ -33,10 +33,10 @@
   },
   "dependencies": {
     "@statewalker/indexer-api": "workspace:*",
-    "@statewalker/db-api": "workspace:*"
+    "@statewalker/db-api": "^0.1.0"
   },
   "devDependencies": {
-    "@statewalker/db-duckdb-node": "workspace:*",
+    "@statewalker/db-duckdb-node": "^0.1.0",
     "@statewalker/indexer-tests": "workspace:*",
     "rimraf": "catalog:",
     "tsdown": "catalog:",
