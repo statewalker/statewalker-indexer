@@ -7,3 +7,7 @@ coverage/
 .DS_Store
 .env
 .env.local
+
+# Test runtime artifacts written into fixture directories
+packages/indexer-tests/src/fixtures/documents/.settings/
+packages/indexer-tests/src/fixtures/documents/.content-index/
