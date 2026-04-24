@@ -87,7 +87,7 @@ Validators (`validateLexQuery`, `validateSemanticQuery`) catch malformed queries
 
 ### Path-prefix filtering
 
-Documents are organized under hierarchical paths (`"/projects/alpha/specs/"`). All search, enumeration, and deletion operations accept optional path prefixes to restrict their scope. For example, passing `paths: ["/docs/"]` limits results to documents whose path starts with `"/docs/"`. Helper utilities (`isCollectionPrefix`, `matchesCollection`, `resolveCollections`) perform prefix and exact matching on path segments, and `buildCollectionClause()` generates parameterized SQL WHERE fragments for SQL-backed implementations.
+Documents are organized under hierarchical paths (`"/projects/alpha/specs/"`). All search, enumeration, and deletion operations accept optional path prefixes to restrict their scope. For example, passing `paths: ["/docs/"]` to `index.search(...)` limits results to documents whose path starts with `"/docs/"`. Prefix matching is a simple `startsWith` at the type level — backends implement it using their native SQL (DuckDB / PGlite) or in-memory filtering (indexer-mem-*).
 
 ### Persistence
 

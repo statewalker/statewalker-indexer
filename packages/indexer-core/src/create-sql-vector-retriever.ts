@@ -83,10 +83,9 @@ export function createSqlVectorRetriever(opts: SqlVectorRetrieverOptions): Embed
   };
 
   const resolveDocId = async (path: DocumentPath): Promise<number> => {
-    await db.query(
-      `INSERT INTO ${docsTable} (path) VALUES ($1) ON CONFLICT (path) DO NOTHING`,
-      [path],
-    );
+    await db.query(`INSERT INTO ${docsTable} (path) VALUES ($1) ON CONFLICT (path) DO NOTHING`, [
+      path,
+    ]);
     const rows = await db.query<{ doc_id: number }>(
       `SELECT doc_id FROM ${docsTable} WHERE path = $1`,
       [path],

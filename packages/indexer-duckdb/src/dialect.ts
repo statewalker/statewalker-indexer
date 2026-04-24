@@ -14,37 +14,79 @@ export function wrapDbAsSqlDb(db: Db): SqlDb {
   };
 }
 
+/**
+ * DuckDB bindings for `FLOAT[dim]` columns go through the `@statewalker/db-duckdb-node` driver, which
+ * does not currently wrap JS arrays as `DuckDBArrayValue`. We format the embedding as a SQL array
+ * literal (locale-independent via `Number.prototype.toString`) and rely on the `$n::FLOAT[dim]` cast
+ * to parse it back. Switching to native array binding is a follow-up when the driver supports it.
+ */
 function embeddingToLiteral(embedding: Float32Array): string {
   return `[${Array.from(embedding).join(",")}]`;
 }
 
 /**
- * DuckDB FTS dialect.
+ * DuckDB FTS stemmer map. DuckDB's `fts` extension accepts a stemmer name per Snowball; we map
+ * ISO-639-1 language codes used at `FullTextIndexInfo.language` to the corresponding stemmer.
+ * Unknown codes fall through to 'porter' as a generic fallback.
+ */
+const DUCKDB_STEMMER_MAP: Record<string, string> = {
+  en: "english",
+  fr: "french",
+  de: "german",
+  es: "spanish",
+  it: "italian",
+  pt: "portuguese",
+  nl: "dutch",
+  ru: "russian",
+  sv: "swedish",
+  no: "norwegian",
+  da: "danish",
+  fi: "finnish",
+  hu: "hungarian",
+  ro: "romanian",
+  tr: "turkish",
+};
+
+function resolveDuckDbStemmer(lang: string): string {
+  return DUCKDB_STEMMER_MAP[lang] ?? "porter";
+}
+
+/**
+ * The `fts_main_<table>` schema that DuckDB's fts extension creates when we call `create_fts_index`.
+ * Used in the BM25 search SQL.
+ */
+function ftsMainSchema(tableName: string): string {
+  return `fts_main_${tableName}`;
+}
+
+/**
+ * DuckDB FTS dialect using the official `fts` extension.
  *
- * Current implementation: LIKE-based scanning (word-count + rank-decay). Phase 8 replaces this with
- * the official `fts` community extension (BM25 via `PRAGMA create_fts_index` + `match_bm25`).
+ * The table adds a virtual `fts_id` column that concatenates `(doc_id, block_id)` — required because
+ * `create_fts_index` takes a single-column identifier. The FTS index is (re)built lazily by the
+ * retriever (first search after a write; also on flush) via the `rebuild` hook, because the
+ * extension does not auto-update on INSERT/DELETE.
  */
 export const duckdbFtsDialect: SqlFtsDialect = {
   createTableDdl({ tableName }) {
     return [
-      `CREATE TABLE IF NOT EXISTS ${tableName} (doc_id INTEGER NOT NULL, block_id TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT, PRIMARY KEY (doc_id, block_id))`,
+      `CREATE TABLE IF NOT EXISTS ${tableName} (doc_id INTEGER NOT NULL, block_id TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT, fts_id TEXT GENERATED ALWAYS AS (CAST(doc_id AS VARCHAR) || '_' || block_id) VIRTUAL, PRIMARY KEY (doc_id, block_id))`,
     ];
   },
 
+  async rebuild({ db, tableName, info }) {
+    const stemmer = resolveDuckDbStemmer(info.language);
+    await db.exec(
+      `PRAGMA create_fts_index('${tableName}', 'fts_id', 'content', stemmer='${stemmer}', stopwords='none', strip_accents=1, lower=1, overwrite=1)`,
+    );
+  },
+
   async search({ db, tableName, docsTable, query, paths, topK }) {
-    const words = query
-      .toLowerCase()
-      .split(/\s+/)
-      .filter((w) => w.length > 0);
-    if (words.length === 0) return [];
+    const trimmed = query.trim();
+    if (trimmed.length === 0) return [];
 
-    const likeParams = words.map((w) => `%${w}%`);
-    const conditions = words.map((_, i) => `LOWER(b.content) LIKE $${i + 1}`);
-    const scoreExpr = words
-      .map((_, i) => `CASE WHEN LOWER(b.content) LIKE $${i + 1} THEN 1 ELSE 0 END`)
-      .join(" + ");
-
-    const allParams: unknown[] = [...likeParams];
+    const schema = ftsMainSchema(tableName);
+    const allParams: unknown[] = [trimmed];
 
     let pathClause = "";
     if (paths && paths.length > 0) {
@@ -56,20 +98,20 @@ export const duckdbFtsDialect: SqlFtsDialect = {
     const topKParam = `$${allParams.length + 1}`;
     allParams.push(topK);
 
-    const sql = `SELECT d.path, b.block_id, b.content, (${scoreExpr}) AS match_count FROM ${tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id WHERE (${conditions.join(" OR ")})${pathClause} ORDER BY match_count DESC LIMIT ${topKParam}`;
+    const sql = `SELECT d.path, b.block_id, b.content, ${schema}.match_bm25(b.fts_id, $1) AS score FROM ${tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id WHERE ${schema}.match_bm25(b.fts_id, $1) IS NOT NULL${pathClause} ORDER BY score DESC LIMIT ${topKParam}`;
 
     const rows = await db.query<{
       path: string;
       block_id: string;
       content: string;
-      match_count: number;
+      score: number;
     }>(sql, allParams);
 
-    return rows.map((row, rank) => ({
+    return rows.map((row) => ({
       path: row.path as import("@statewalker/indexer-api").DocumentPath,
       blockId: row.block_id,
       content: row.content,
-      score: (row.match_count / words.length) * (1 - rank / (rows.length + 1)),
+      score: row.score,
     }));
   },
 };
@@ -86,14 +128,27 @@ export const duckdbVectorDialect: SqlVectorDialect = {
     const dim = info.dimensionality;
     return [
       `CREATE TABLE IF NOT EXISTS ${tableName} (doc_id INTEGER NOT NULL, block_id TEXT NOT NULL, embedding FLOAT[${dim}] NOT NULL, PRIMARY KEY (doc_id, block_id))`,
-      `CREATE INDEX IF NOT EXISTS ${indexName} ON ${tableName} USING HNSW (embedding)`,
+      // HNSW index with the cosine metric: required so `array_cosine_distance` searches actually
+      // use the index. Without this option DuckDB's vss extension defaults to l2sq and the planner
+      // falls back to a sequential scan for cosine queries.
+      `CREATE INDEX IF NOT EXISTS ${indexName} ON ${tableName} USING HNSW (embedding) WITH (metric = 'cosine')`,
     ];
   },
 
   bindEmbedding: embeddingToLiteral,
   embeddingCastSuffix: (dim) => `::FLOAT[${dim}]`,
 
-  async search({ db, tableName, docsTable, queryEmbedding, paths, topK, info, bindEmbedding, embeddingCastSuffix }) {
+  async search({
+    db,
+    tableName,
+    docsTable,
+    queryEmbedding,
+    paths,
+    topK,
+    info,
+    bindEmbedding,
+    embeddingCastSuffix,
+  }) {
     const vecLiteral = bindEmbedding(queryEmbedding);
     const dim = info.dimensionality;
 
@@ -128,6 +183,7 @@ export const duckdbVectorDialect: SqlVectorDialect = {
 /** Aggregate DuckDB dialect for `createSqlBackedIndexer`. */
 export const duckdbDialect: SqlBackedDialect = {
   extensionInit: [
+    "INSTALL fts; LOAD fts;",
     "INSTALL vss; LOAD vss;",
     "SET hnsw_enable_experimental_persistence = true;",
   ],

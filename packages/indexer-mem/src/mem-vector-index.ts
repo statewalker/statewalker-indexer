@@ -74,7 +74,7 @@ export class MemVectorIndex implements EmbeddingIndex {
     const bestScores = new Map<string, EmbeddingSearchResult>();
 
     for (const queryEmb of embeddings) {
-      validateDimensionality(this.info,queryEmb);
+      validateDimensionality(this.info, queryEmb);
       const filtered = [...this.filteredEntries(paths)];
       const results = bruteForceSearch(queryEmb, filtered, topK);
       for (const r of results) {
@@ -95,7 +95,7 @@ export class MemVectorIndex implements EmbeddingIndex {
   async addDocument(blocks: EmbeddingBlock[]): Promise<void> {
     this.ensureOpen();
     for (const block of blocks) {
-      validateDimensionality(this.info,block.embedding);
+      validateDimensionality(this.info, block.embedding);
       const key = compositeKey(block.path, block.blockId);
       this.entries.set(key, {
         path: block.path,

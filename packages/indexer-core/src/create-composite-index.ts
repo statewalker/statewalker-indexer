@@ -10,9 +10,9 @@ import type {
   Metadata,
   PathSelector,
 } from "@statewalker/indexer-api";
+import { toAsyncIterable } from "./async.js";
 import { compositeKey } from "./composite-key.js";
 import { mergeByRRF, mergeByWeights } from "./merge.js";
-import { toAsyncIterable } from "./async.js";
 
 export interface CompositeIndexOptions {
   name: string;
