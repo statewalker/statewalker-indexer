@@ -1,4 +1,4 @@
-# @repo/indexer-api
+# @statewalker/indexer-api
 
 Backend-agnostic TypeScript API for hybrid search indexes combining **full-text search (FTS)** and **vector/embedding similarity search**.
 
@@ -12,7 +12,7 @@ Modern search applications need more than keyword matching. They need to combine
 
 Each of these capabilities can be backed by very different storage engines — in-memory structures, SQLite/PGlite, DuckDB, or external services. Without a shared abstraction, application code becomes tightly coupled to a specific backend, making it hard to swap implementations, test in isolation, or run the same logic in different environments (browser, Node, edge).
 
-`@repo/indexer-api` solves this by defining a **pure-interface contract** with zero runtime dependencies. Application code programs against the API; concrete backends are injected at startup.
+`@statewalker/indexer-api` solves this by defining a **pure-interface contract** with zero runtime dependencies. Application code programs against the API; concrete backends are injected at startup.
 
 ## How it works
 
@@ -116,24 +116,24 @@ interface IndexerPersistence {
 
 | Package | Backend | Notes |
 |---------|---------|-------|
-| `@repo/indexer-mem` | In-memory (Flechette/Arrow) | Foundation layer; vector-only |
-| `@repo/indexer-mem-minisearch` | MiniSearch + in-memory vectors | Lightweight FTS; optional persistence |
-| `@repo/indexer-mem-flexsearch` | FlexSearch + in-memory vectors | Alternative FTS engine; optional persistence |
-| `@repo/indexer-pglite` | PGlite + pgvector | SQL-backed; full FTS + vector |
-| `@repo/indexer-duckdb` | DuckDB + VSS/HNSW | Analytical SQL; high-performance vector search |
+| `@statewalker/indexer-mem` | In-memory (Flechette/Arrow) | Foundation layer; vector-only |
+| `@statewalker/indexer-mem-minisearch` | MiniSearch + in-memory vectors | Lightweight FTS; optional persistence |
+| `@statewalker/indexer-mem-flexsearch` | FlexSearch + in-memory vectors | Alternative FTS engine; optional persistence |
+| `@statewalker/indexer-pglite` | PGlite + pgvector | SQL-backed; full FTS + vector |
+| `@statewalker/indexer-duckdb` | DuckDB + VSS/HNSW | Analytical SQL; high-performance vector search |
 
 Supporting packages:
 
 | Package | Purpose |
 |---------|---------|
-| `@repo/indexer-chunker` | Markdown splitting and code fence detection for content preprocessing |
+| `@statewalker/indexer-chunker` | Markdown splitting and code fence detection for content preprocessing |
 
 ## How to use
 
 ### Creating an index
 
 ```ts
-import type { Indexer, CreateIndexParams } from "@repo/indexer-api";
+import type { Indexer, CreateIndexParams } from "@statewalker/indexer-api";
 
 // Obtain an Indexer from a concrete backend (e.g., MiniSearch, PGlite, DuckDB)
 const indexer: Indexer = createMiniSearchIndexer(/* ... */);
@@ -198,7 +198,7 @@ for await (const result of index.search({
 ### Using SemanticIndex for automatic embedding
 
 ```ts
-import { SemanticIndex } from "@repo/indexer-api";
+import { SemanticIndex } from "@statewalker/indexer-api";
 
 const semantic = new SemanticIndex(index, embed);
 
@@ -219,7 +219,7 @@ const results = await semantic.search({
 ### Multi-search with RRF fusion
 
 ```ts
-import { defaultMultiSearch } from "@repo/indexer-api";
+import { defaultMultiSearch } from "@statewalker/indexer-api";
 
 const results = await defaultMultiSearch(index, {
   queries: ["CAP theorem", "consistency models"],
@@ -232,7 +232,7 @@ const results = await defaultMultiSearch(index, {
 ### Structured queries
 
 ```ts
-import { parseStructuredQuery } from "@repo/indexer-api";
+import { parseStructuredQuery } from "@statewalker/indexer-api";
 
 const parsed = parseStructuredQuery("lex: CAP theorem\nvec: consensus algorithms");
 // [{ type: "lex", query: "CAP theorem" }, { type: "vec", query: "consensus algorithms" }]
@@ -241,7 +241,7 @@ const parsed = parseStructuredQuery("lex: CAP theorem\nvec: consensus algorithms
 ### SearchPipeline
 
 ```ts
-import { SearchPipeline } from "@repo/indexer-api";
+import { SearchPipeline } from "@statewalker/indexer-api";
 
 const results = await new SearchPipeline({
   index,
@@ -261,7 +261,7 @@ const results = await new SearchPipeline({
 ### Batch indexing with indexDocuments
 
 ```ts
-import { indexDocuments } from "@repo/indexer-api";
+import { indexDocuments } from "@statewalker/indexer-api";
 
 const { indexed } = await indexDocuments(index, [
   { path: "/docs/", blockId: "b1", content: "First document..." },
