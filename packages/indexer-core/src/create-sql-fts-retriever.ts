@@ -27,6 +27,14 @@ export interface SqlFtsDialect {
   createTableDdl(opts: { tableName: string; info: FullTextIndexInfo }): string[];
 
   /**
+   * Optional hook to (re)build an external FTS index structure after ingest/delete. When set, the
+   * retriever tracks a dirty flag (set on every write) and calls this lazily before `search` and on
+   * `flush`. Dialects whose FTS is maintained automatically by the database (e.g. PGlite's `tsvector`)
+   * leave this undefined.
+   */
+  rebuild?(opts: { db: SqlDb; tableName: string; info: FullTextIndexInfo }): Promise<void>;
+
+  /**
    * Execute a lexical search for a single query string. The base iterates `queries[]` and merges by best score.
    */
   search(opts: {
@@ -59,16 +67,24 @@ export function createSqlFtsRetriever(opts: SqlFtsRetrieverOptions): FullTextInd
   const { db, prefix, docsTable, info, dialect } = opts;
   const tableName = `idx_${prefix}_fts`;
   let closed = false;
+  // Start dirty: forces a rebuild on first search after `init()` or a reopen, covering both
+  // brand-new tables and tables whose FTS index structure may be out of date.
+  let dirty = dialect.rebuild != null;
 
   const ensureOpen = (): void => {
     if (closed) throw new Error("FullTextIndex is closed");
   };
 
+  const ensureRebuilt = async (): Promise<void> => {
+    if (!dialect.rebuild || !dirty) return;
+    await dialect.rebuild({ db, tableName, info });
+    dirty = false;
+  };
+
   const resolveDocId = async (path: DocumentPath): Promise<number> => {
-    await db.query(
-      `INSERT INTO ${docsTable} (path) VALUES ($1) ON CONFLICT (path) DO NOTHING`,
-      [path],
-    );
+    await db.query(`INSERT INTO ${docsTable} (path) VALUES ($1) ON CONFLICT (path) DO NOTHING`, [
+      path,
+    ]);
     const rows = await db.query<{ doc_id: number }>(
       `SELECT doc_id FROM ${docsTable} WHERE path = $1`,
       [path],
@@ -94,6 +110,8 @@ export function createSqlFtsRetriever(opts: SqlFtsRetrieverOptions): FullTextInd
       ensureOpen();
       const { queries, topK, paths } = params;
       if (!queries || queries.length === 0) return;
+
+      await ensureRebuilt();
 
       const bestScores = new Map<string, FullTextSearchResult>();
       for (const query of queries) {
@@ -130,6 +148,7 @@ export function createSqlFtsRetriever(opts: SqlFtsRetrieverOptions): FullTextInd
           [docId, block.blockId, block.content, metaJson],
         );
       }
+      if (dialect.rebuild) dirty = true;
     },
 
     async addDocuments(
@@ -156,6 +175,7 @@ export function createSqlFtsRetriever(opts: SqlFtsRetrieverOptions): FullTextInd
           );
         }
       }
+      if (dialect.rebuild) dirty = true;
     },
 
     async getSize(pathPrefix?: DocumentPath): Promise<number> {
@@ -226,6 +246,7 @@ export function createSqlFtsRetriever(opts: SqlFtsRetrieverOptions): FullTextInd
 
     async flush(): Promise<void> {
       ensureOpen();
+      await ensureRebuilt();
     },
 
     async deleteIndex(): Promise<void> {

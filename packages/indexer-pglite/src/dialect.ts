@@ -40,6 +40,12 @@ function resolvePgLanguage(lang: string): string {
   return LANGUAGE_MAP[lang] ?? lang;
 }
 
+/**
+ * pgvector's `vector(dim)` column accepts either a JSON-array text literal (`"[1,2,3]"`) cast with
+ * `::vector(dim)`, or a JS array bound by the driver. The text-literal path is currently used
+ * because it works uniformly across the pglite vector extension versions available in the catalog;
+ * swapping to native array binding is a follow-up when driver support is confirmed.
+ */
 function embeddingToLiteral(embedding: Float32Array): string {
   return `[${Array.from(embedding).join(",")}]`;
 }
@@ -114,7 +120,17 @@ export const pgliteVectorDialect: SqlVectorDialect = {
   bindEmbedding: embeddingToLiteral,
   embeddingCastSuffix: (dim) => `::vector(${dim})`,
 
-  async search({ db, tableName, docsTable, queryEmbedding, paths, topK, info, bindEmbedding, embeddingCastSuffix }) {
+  async search({
+    db,
+    tableName,
+    docsTable,
+    queryEmbedding,
+    paths,
+    topK,
+    info,
+    bindEmbedding,
+    embeddingCastSuffix,
+  }) {
     const vecLiteral = bindEmbedding(queryEmbedding);
     const dim = info.dimensionality;
 
