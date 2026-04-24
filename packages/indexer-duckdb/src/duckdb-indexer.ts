@@ -1,8 +1,13 @@
 import type { Db } from "@statewalker/db-api";
-import type { CreateIndexParams, Index, Indexer, IndexInfo } from "@statewalker/indexer-api";
-import { sanitizePrefix } from "@statewalker/indexer-core";
+import type {
+  CreateIndexParams,
+  DocumentPath,
+  Index,
+  Indexer,
+  IndexInfo,
+} from "@statewalker/indexer-api";
+import { createCompositeIndex, sanitizePrefix } from "@statewalker/indexer-core";
 import { DuckDbFullTextIndex } from "./duckdb-full-text-index.js";
-import { DuckDbIndex } from "./duckdb-index.js";
 import { DuckDbVectorIndex } from "./duckdb-vector-index.js";
 
 export interface DuckDbIndexerOptions {
@@ -30,9 +35,11 @@ export async function createDuckDbIndexer(options: DuckDbIndexerOptions): Promis
   }
 
   function ensureOpen(): void {
-    if (closed) {
-      throw new Error("Indexer is closed");
-    }
+    if (closed) throw new Error("Indexer is closed");
+  }
+
+  async function ensureDocsSequence(prefix: string): Promise<void> {
+    await db.exec(`CREATE SEQUENCE IF NOT EXISTS idx_${prefix}_docs_seq START 1`);
   }
 
   async function createDocsTable(prefix: string): Promise<string> {
@@ -43,9 +50,32 @@ export async function createDuckDbIndexer(options: DuckDbIndexerOptions): Promis
     return docsTable;
   }
 
-  async function ensureDocsSequence(prefix: string): Promise<void> {
-    const seqName = `idx_${prefix}_docs_seq`;
-    await db.exec(`CREATE SEQUENCE IF NOT EXISTS ${seqName} START 1`);
+  function buildIndex(
+    name: string,
+    docsTable: string,
+    fts: DuckDbFullTextIndex | null,
+    vec: DuckDbVectorIndex | null,
+  ): Index {
+    return createCompositeIndex({
+      name,
+      fts,
+      vec,
+      getSize: async (pathPrefix?: DocumentPath): Promise<number> => {
+        if (fts !== null && vec !== null) {
+          const pathClause = pathPrefix !== undefined ? ` WHERE d.path LIKE $1 || '%'` : "";
+          const params = pathPrefix !== undefined ? [pathPrefix] : [];
+          const sql = `SELECT COUNT(*) AS cnt FROM (SELECT b.doc_id, b.block_id FROM ${fts.tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id${pathClause} UNION SELECT b.doc_id, b.block_id FROM ${vec.tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id${pathClause})`;
+          const rows = await db.query<{ cnt: number | bigint }>(sql, params);
+          return Number(rows[0]?.cnt ?? 0);
+        }
+        if (fts !== null) return fts.getSize(pathPrefix);
+        if (vec !== null) return vec.getSize(pathPrefix);
+        return 0;
+      },
+      onDeleteIndex: async () => {
+        await db.exec(`DROP TABLE IF EXISTS ${docsTable}`);
+      },
+    });
   }
 
   const indexer: Indexer = {
@@ -103,27 +133,21 @@ export async function createDuckDbIndexer(options: DuckDbIndexerOptions): Promis
       if (fts) await fts.init();
       if (vec) await vec.init();
 
-      const config = JSON.stringify({ fulltext, vector });
       await db.query("INSERT INTO __indexer_manifest (name, config) VALUES ($1, $2)", [
         name,
-        config,
+        JSON.stringify({ fulltext, vector }),
       ]);
 
-      const index = DuckDbIndex(name, db, docsTable, fts, vec);
+      const index = buildIndex(name, docsTable, fts, vec);
       indexes.set(name, index);
       manifest.set(name, { name });
-
       return index;
     },
 
     async getIndex(name: string): Promise<Index | null> {
       ensureOpen();
-      if (indexes.has(name)) {
-        return indexes.get(name) ?? null;
-      }
-      if (!manifest.has(name)) {
-        return null;
-      }
+      if (indexes.has(name)) return indexes.get(name) ?? null;
+      if (!manifest.has(name)) return null;
 
       const rows = await db.query<{ config: string }>(
         "SELECT config FROM __indexer_manifest WHERE name = $1",
@@ -159,7 +183,7 @@ export async function createDuckDbIndexer(options: DuckDbIndexerOptions): Promis
           })
         : null;
 
-      const index = DuckDbIndex(name, db, docsTable, fts, vec);
+      const index = buildIndex(name, docsTable, fts, vec);
       indexes.set(name, index);
       return index;
     },
@@ -194,9 +218,7 @@ export async function createDuckDbIndexer(options: DuckDbIndexerOptions): Promis
     async close(): Promise<void> {
       if (closed) return;
       closed = true;
-      for (const index of indexes.values()) {
-        await index.close();
-      }
+      for (const index of indexes.values()) await index.close();
       indexes.clear();
       manifest.clear();
     },
