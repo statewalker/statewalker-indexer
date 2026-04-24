@@ -1,9 +1,14 @@
 import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite/vector";
-import type { CreateIndexParams, Index, Indexer, IndexInfo } from "@statewalker/indexer-api";
-import { sanitizePrefix } from "@statewalker/indexer-core";
+import type {
+  CreateIndexParams,
+  DocumentPath,
+  Index,
+  Indexer,
+  IndexInfo,
+} from "@statewalker/indexer-api";
+import { createCompositeIndex, sanitizePrefix } from "@statewalker/indexer-core";
 import { PGLiteFullTextIndex } from "./pglite-full-text-index.js";
-import { PGLiteIndex } from "./pglite-index.js";
 import { PGLiteVectorIndex } from "./pglite-vector-index.js";
 
 export interface PGLiteIndexerOptions {
@@ -31,9 +36,7 @@ export async function createPGLiteIndexer(options?: PGLiteIndexerOptions): Promi
   }
 
   function ensureOpen(): void {
-    if (closed) {
-      throw new Error("Indexer is closed");
-    }
+    if (closed) throw new Error("Indexer is closed");
   }
 
   async function createDocsTable(prefix: string): Promise<string> {
@@ -42,6 +45,34 @@ export async function createPGLiteIndexer(options?: PGLiteIndexerOptions): Promi
       `CREATE TABLE IF NOT EXISTS ${docsTable} (doc_id SERIAL PRIMARY KEY, path TEXT NOT NULL UNIQUE)`,
     );
     return docsTable;
+  }
+
+  function buildIndex(
+    name: string,
+    docsTable: string,
+    fts: PGLiteFullTextIndex | null,
+    vec: PGLiteVectorIndex | null,
+  ): Index {
+    return createCompositeIndex({
+      name,
+      fts,
+      vec,
+      getSize: async (pathPrefix?: DocumentPath): Promise<number> => {
+        if (fts !== null && vec !== null) {
+          const pathClause = pathPrefix !== undefined ? ` WHERE d.path LIKE $1 || '%'` : "";
+          const params = pathPrefix !== undefined ? [pathPrefix] : [];
+          const sql = `SELECT COUNT(*) AS cnt FROM (SELECT b.doc_id, b.block_id FROM ${fts.tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id${pathClause} UNION SELECT b.doc_id, b.block_id FROM ${vec.tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id${pathClause}) AS combined`;
+          const { rows } = await db.query<{ cnt: number | bigint }>(sql, params);
+          return Number(rows[0]?.cnt ?? 0);
+        }
+        if (fts !== null) return fts.getSize(pathPrefix);
+        if (vec !== null) return vec.getSize(pathPrefix);
+        return 0;
+      },
+      onDeleteIndex: async () => {
+        await db.exec(`DROP TABLE IF EXISTS ${docsTable}`);
+      },
+    });
   }
 
   const indexer: Indexer = {
@@ -95,27 +126,21 @@ export async function createPGLiteIndexer(options?: PGLiteIndexerOptions): Promi
       if (fts) await fts.init();
       if (vec) await vec.init();
 
-      const config = JSON.stringify({ fulltext, vector });
       await db.query("INSERT INTO __indexer_manifest (name, config) VALUES ($1, $2)", [
         name,
-        config,
+        JSON.stringify({ fulltext, vector }),
       ]);
 
-      const index = PGLiteIndex(name, db, docsTable, fts, vec);
+      const index = buildIndex(name, docsTable, fts, vec);
       indexes.set(name, index);
       manifest.set(name, { name });
-
       return index;
     },
 
     async getIndex(name: string): Promise<Index | null> {
       ensureOpen();
-      if (indexes.has(name)) {
-        return indexes.get(name) ?? null;
-      }
-      if (!manifest.has(name)) {
-        return null;
-      }
+      if (indexes.has(name)) return indexes.get(name) ?? null;
+      if (!manifest.has(name)) return null;
 
       const result = await db.query<{ config: string }>(
         "SELECT config FROM __indexer_manifest WHERE name = $1",
@@ -150,7 +175,7 @@ export async function createPGLiteIndexer(options?: PGLiteIndexerOptions): Promi
           })
         : null;
 
-      const index = PGLiteIndex(name, db, docsTable, fts, vec);
+      const index = buildIndex(name, docsTable, fts, vec);
       indexes.set(name, index);
       return index;
     },
@@ -184,14 +209,10 @@ export async function createPGLiteIndexer(options?: PGLiteIndexerOptions): Promi
     async close(): Promise<void> {
       if (closed) return;
       closed = true;
-      for (const index of indexes.values()) {
-        await index.close();
-      }
+      for (const index of indexes.values()) await index.close();
       indexes.clear();
       manifest.clear();
-      if (ownsDb) {
-        await db.close();
-      }
+      if (ownsDb) await db.close();
     },
   };
 
