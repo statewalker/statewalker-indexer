@@ -6,6 +6,7 @@ import type {
   IndexInfo,
   PersistenceEntry,
 } from "@statewalker/indexer-api";
+import { readEntryBytes, singleChunk, toBytes } from "@statewalker/indexer-core";
 import { MemIndex, MemVectorIndex } from "@statewalker/indexer-mem";
 import { FlexSearchFullTextIndex } from "./flexsearch-full-text-index.js";
 
@@ -23,35 +24,8 @@ interface StoredIndexConfig {
   };
 }
 
-function toBytes(str: string): Uint8Array {
-  return new TextEncoder().encode(str);
-}
-
-function singleChunk(data: Uint8Array): AsyncIterable<Uint8Array> {
-  return {
-    async *[Symbol.asyncIterator]() {
-      yield data;
-    },
-  };
-}
-
-async function readEntryBytes(entry: PersistenceEntry): Promise<Uint8Array> {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of entry.content) {
-    chunks.push(chunk);
-  }
-  const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return result;
-}
-
 export function createFlexSearchIndexer(options?: FlexSearchIndexerOptions): Indexer {
-  const indexes = new Map<string, MemIndex>();
+  const indexes = new Map<string, Index>();
   const configs = new Map<string, StoredIndexConfig>();
   const manifest = new Map<string, IndexInfo>();
   let closed = false;
@@ -111,27 +85,7 @@ export function createFlexSearchIndexer(options?: FlexSearchIndexerOptions): Ind
         }
       }
 
-      const index = new MemIndex(name, fts, vec);
-
-      // Restore block tracking by iterating sub-indexes.
-      // addDocument with no content/embedding just populates the tracking map
-      // without re-adding to sub-indexes.
-      const seen = new Set<string>();
-      if (fts) {
-        for await (const ref of fts.getDocumentBlocksRefs()) {
-          seen.add(`${ref.path}\0${ref.blockId}`);
-          await index.addDocument([{ path: ref.path, blockId: ref.blockId }]);
-        }
-      }
-      if (vec) {
-        for await (const ref of vec.getDocumentBlocksRefs()) {
-          const key = `${ref.path}\0${ref.blockId}`;
-          if (!seen.has(key)) {
-            await index.addDocument([{ path: ref.path, blockId: ref.blockId }]);
-          }
-        }
-      }
-
+      const index = MemIndex(name, fts, vec);
       indexes.set(name, index);
       manifest.set(name, { name });
     }
@@ -233,7 +187,7 @@ export function createFlexSearchIndexer(options?: FlexSearchIndexerOptions): Ind
           })
         : null;
 
-      const index = new MemIndex(name, fts, vec);
+      const index = MemIndex(name, fts, vec);
       indexes.set(name, index);
       manifest.set(name, { name });
       configs.set(name, { name, fulltext, vector });

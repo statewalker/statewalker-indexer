@@ -10,6 +10,7 @@ import type {
   Metadata,
   PathSelector,
 } from "@statewalker/indexer-api";
+import { toAsyncIterable } from "@statewalker/indexer-core";
 
 export class DuckDbFullTextIndex implements FullTextIndex {
   private readonly db: Db;
@@ -156,7 +157,7 @@ export class DuckDbFullTextIndex implements FullTextIndex {
     pathSelectors: PathSelector[] | AsyncIterable<PathSelector>,
   ): Promise<void> {
     this.ensureOpen();
-    for await (const sel of pathSelectors as AsyncIterable<PathSelector>) {
+    for await (const sel of toAsyncIterable(pathSelectors)) {
       if (sel.blockId !== undefined) {
         await this.db.query(
           `DELETE FROM ${this.tableName} WHERE doc_id IN (SELECT doc_id FROM ${this.docsTable} WHERE path = $1) AND block_id = $2`,

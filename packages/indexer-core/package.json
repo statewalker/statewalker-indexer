@@ -1,9 +1,9 @@
 {
-  "name": "@statewalker/indexer-mem-minisearch",
+  "name": "@statewalker/indexer-core",
   "version": "0.1.0",
-  "private": false,
+  "private": true,
   "type": "module",
-  "description": "In-memory indexer implementation backed by MiniSearch for full-text search.",
+  "description": "Workspace-internal scaffolding shared by @statewalker/indexer-* backends. Not published.",
   "homepage": "https://github.com/statewalker/statewalker-indexer",
   "author": {
     "name": "Mikhail Kotelnikov",
@@ -32,20 +32,13 @@
     "format": "biome format --write ."
   },
   "dependencies": {
-    "@statewalker/indexer-api": "workspace:*",
-    "@statewalker/indexer-core": "workspace:*",
-    "@statewalker/indexer-mem": "workspace:*",
-    "minisearch": "catalog:"
+    "@statewalker/indexer-api": "workspace:*"
   },
   "devDependencies": {
-    "@statewalker/indexer-tests": "workspace:*",
     "rimraf": "catalog:",
     "tsdown": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   },
-  "sideEffects": false,
-  "publishConfig": {
-    "access": "public"
-  }
+  "sideEffects": false
 }

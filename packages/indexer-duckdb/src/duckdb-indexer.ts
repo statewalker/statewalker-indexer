@@ -1,5 +1,6 @@
 import type { Db } from "@statewalker/db-api";
 import type { CreateIndexParams, Index, Indexer, IndexInfo } from "@statewalker/indexer-api";
+import { sanitizePrefix } from "@statewalker/indexer-core";
 import { DuckDbFullTextIndex } from "./duckdb-full-text-index.js";
 import { DuckDbIndex } from "./duckdb-index.js";
 import { DuckDbVectorIndex } from "./duckdb-vector-index.js";
@@ -8,13 +9,9 @@ export interface DuckDbIndexerOptions {
   db: Db;
 }
 
-function sanitizePrefix(name: string): string {
-  return name.replace(/[^a-zA-Z0-9]/g, (ch) => `_${ch.charCodeAt(0)}_`);
-}
-
 export async function createDuckDbIndexer(options: DuckDbIndexerOptions): Promise<Indexer> {
   const { db } = options;
-  const indexes = new Map<string, DuckDbIndex>();
+  const indexes = new Map<string, Index>();
   const manifest = new Map<string, IndexInfo>();
   let closed = false;
 
@@ -112,7 +109,7 @@ export async function createDuckDbIndexer(options: DuckDbIndexerOptions): Promis
         config,
       ]);
 
-      const index = new DuckDbIndex(name, db, docsTable, fts, vec);
+      const index = DuckDbIndex(name, db, docsTable, fts, vec);
       indexes.set(name, index);
       manifest.set(name, { name });
 
@@ -162,7 +159,7 @@ export async function createDuckDbIndexer(options: DuckDbIndexerOptions): Promis
           })
         : null;
 
-      const index = new DuckDbIndex(name, db, docsTable, fts, vec);
+      const index = DuckDbIndex(name, db, docsTable, fts, vec);
       indexes.set(name, index);
       return index;
     },

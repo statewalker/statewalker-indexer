@@ -9,6 +9,7 @@ import type {
   EmbeddingSearchResult,
   PathSelector,
 } from "@statewalker/indexer-api";
+import { toAsyncIterable, validateDimensionality } from "@statewalker/indexer-core";
 
 export class DuckDbVectorIndex implements EmbeddingIndex {
   private readonly db: Db;
@@ -39,14 +40,6 @@ export class DuckDbVectorIndex implements EmbeddingIndex {
   private ensureOpen(): void {
     if (this.closed) {
       throw new Error("EmbeddingIndex is closed");
-    }
-  }
-
-  private validateDimensionality(embedding: Float32Array): void {
-    if (embedding.length !== this.info.dimensionality) {
-      throw new Error(
-        `Expected dimensionality ${this.info.dimensionality}, got ${embedding.length}`,
-      );
     }
   }
 
@@ -81,7 +74,7 @@ export class DuckDbVectorIndex implements EmbeddingIndex {
     const dim = this.info.dimensionality;
 
     for (const queryEmb of embeddings) {
-      this.validateDimensionality(queryEmb);
+      validateDimensionality(this.info,queryEmb);
       const vecLiteral = this.embeddingToSql(queryEmb);
 
       let pathClause = "";
@@ -128,7 +121,7 @@ export class DuckDbVectorIndex implements EmbeddingIndex {
   async addDocument(blocks: EmbeddingBlock[]): Promise<void> {
     this.ensureOpen();
     for (const block of blocks) {
-      this.validateDimensionality(block.embedding);
+      validateDimensionality(this.info,block.embedding);
       const docId = await this.resolveDocId(block.path);
       const dim = this.info.dimensionality;
       const vecLiteral = this.embeddingToSql(block.embedding);
@@ -157,7 +150,7 @@ export class DuckDbVectorIndex implements EmbeddingIndex {
     pathSelectors: PathSelector[] | AsyncIterable<PathSelector>,
   ): Promise<void> {
     this.ensureOpen();
-    for await (const sel of pathSelectors as AsyncIterable<PathSelector>) {
+    for await (const sel of toAsyncIterable(pathSelectors)) {
       if (sel.blockId !== undefined) {
         await this.db.query(
           `DELETE FROM ${this.tableName} WHERE doc_id IN (SELECT doc_id FROM ${this.docsTable} WHERE path = $1) AND block_id = $2`,
