@@ -1,6 +1,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite/vector";
 import type { CreateIndexParams, Index, Indexer, IndexInfo } from "@statewalker/indexer-api";
+import { sanitizePrefix } from "@statewalker/indexer-core";
 import { PGLiteFullTextIndex } from "./pglite-full-text-index.js";
 import { PGLiteIndex } from "./pglite-index.js";
 import { PGLiteVectorIndex } from "./pglite-vector-index.js";
@@ -9,14 +10,10 @@ export interface PGLiteIndexerOptions {
   db?: PGlite;
 }
 
-function sanitizePrefix(name: string): string {
-  return name.replace(/[^a-zA-Z0-9]/g, (ch) => `_${ch.charCodeAt(0)}_`);
-}
-
 export async function createPGLiteIndexer(options?: PGLiteIndexerOptions): Promise<Indexer> {
   const ownsDb = !options?.db;
   const db = options?.db ?? (await PGlite.create({ extensions: { vector } }));
-  const indexes = new Map<string, PGLiteIndex>();
+  const indexes = new Map<string, Index>();
   const manifest = new Map<string, IndexInfo>();
   let closed = false;
 
@@ -104,7 +101,7 @@ export async function createPGLiteIndexer(options?: PGLiteIndexerOptions): Promi
         config,
       ]);
 
-      const index = new PGLiteIndex(name, db, docsTable, fts, vec);
+      const index = PGLiteIndex(name, db, docsTable, fts, vec);
       indexes.set(name, index);
       manifest.set(name, { name });
 
@@ -153,7 +150,7 @@ export async function createPGLiteIndexer(options?: PGLiteIndexerOptions): Promi
           })
         : null;
 
-      const index = new PGLiteIndex(name, db, docsTable, fts, vec);
+      const index = PGLiteIndex(name, db, docsTable, fts, vec);
       indexes.set(name, index);
       return index;
     },

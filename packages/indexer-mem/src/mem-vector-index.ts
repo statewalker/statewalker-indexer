@@ -10,6 +10,12 @@ import type {
   PathSelector,
 } from "@statewalker/indexer-api";
 import {
+  compositeKey,
+  matchesPrefix,
+  toAsyncIterable,
+  validateDimensionality,
+} from "@statewalker/indexer-core";
+import {
   fixedSizeList,
   float32,
   tableFromArrays,
@@ -26,14 +32,6 @@ interface StoredEntry {
   metadata?: Metadata;
 }
 
-function compositeKey(path: DocumentPath, blockId: string): string {
-  return `${path}\0${blockId}`;
-}
-
-function matchesPrefix(path: DocumentPath, prefix: DocumentPath): boolean {
-  return path.startsWith(prefix);
-}
-
 export class MemVectorIndex implements EmbeddingIndex {
   private readonly info: EmbeddingIndexInfo;
   private readonly entries = new Map<string, StoredEntry>();
@@ -46,14 +44,6 @@ export class MemVectorIndex implements EmbeddingIndex {
   private ensureOpen(): void {
     if (this.closed) {
       throw new Error("EmbeddingIndex is closed");
-    }
-  }
-
-  private validateDimensionality(embedding: Float32Array): void {
-    if (embedding.length !== this.info.dimensionality) {
-      throw new Error(
-        `Expected dimensionality ${this.info.dimensionality}, got ${embedding.length}`,
-      );
     }
   }
 
@@ -84,7 +74,7 @@ export class MemVectorIndex implements EmbeddingIndex {
     const bestScores = new Map<string, EmbeddingSearchResult>();
 
     for (const queryEmb of embeddings) {
-      this.validateDimensionality(queryEmb);
+      validateDimensionality(this.info,queryEmb);
       const filtered = [...this.filteredEntries(paths)];
       const results = bruteForceSearch(queryEmb, filtered, topK);
       for (const r of results) {
@@ -105,7 +95,7 @@ export class MemVectorIndex implements EmbeddingIndex {
   async addDocument(blocks: EmbeddingBlock[]): Promise<void> {
     this.ensureOpen();
     for (const block of blocks) {
-      this.validateDimensionality(block.embedding);
+      validateDimensionality(this.info,block.embedding);
       const key = compositeKey(block.path, block.blockId);
       this.entries.set(key, {
         path: block.path,
@@ -129,7 +119,7 @@ export class MemVectorIndex implements EmbeddingIndex {
     pathSelectors: PathSelector[] | AsyncIterable<PathSelector>,
   ): Promise<void> {
     this.ensureOpen();
-    for await (const sel of pathSelectors as AsyncIterable<PathSelector>) {
+    for await (const sel of toAsyncIterable(pathSelectors)) {
       if (sel.blockId !== undefined) {
         this.entries.delete(compositeKey(sel.path, sel.blockId));
       } else {

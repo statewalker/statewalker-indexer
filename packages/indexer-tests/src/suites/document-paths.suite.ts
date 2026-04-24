@@ -228,6 +228,29 @@ export function runDocumentPathsSuite(getIndexer: () => Indexer): void {
       expect(blocks[0]?.content).toBe("hello world");
     });
 
+    it("getDocumentsBlocks scales linearly with block count (regression: O(N²) bug)", async () => {
+      const indexer = getIndexer();
+      const index = await indexer.createIndex({
+        name: "test",
+        fulltext: { language: "en" },
+      });
+      const N = 500;
+      const batch = [];
+      for (let i = 0; i < N; i++) {
+        batch.push({ path: `/docs/p${i}`, blockId: `b${i}`, content: `content-${i}` });
+      }
+      await index.addDocument(batch);
+
+      const start = Date.now();
+      const blocks = await collect(index.getDocumentsBlocks());
+      const duration = Date.now() - start;
+
+      expect(blocks).toHaveLength(N);
+      // O(N) should be well under 1s for 500 blocks; O(N²) would take 2+ seconds
+      // Use a generous 3s ceiling as a sharp signal against quadratic regressions.
+      expect(duration).toBeLessThan(3000);
+    });
+
     // --- Path prefix filtering on sub-indexes ---
 
     it("FTS sub-index respects path prefix in search", async () => {

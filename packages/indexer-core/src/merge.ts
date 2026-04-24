@@ -3,11 +3,9 @@ import type {
   EmbeddingSearchResult,
   FullTextSearchResult,
   HybridSearchResult,
+  HybridWeights,
 } from "@statewalker/indexer-api";
-
-function compositeKey(path: DocumentPath, blockId: string): string {
-  return `${path}\0${blockId}`;
-}
+import { compositeKey } from "./composite-key.js";
 
 export function mergeByRRF(
   ftsResults: FullTextSearchResult[],
@@ -57,7 +55,7 @@ export function mergeByRRF(
 export function mergeByWeights(
   ftsResults: FullTextSearchResult[],
   vecResults: EmbeddingSearchResult[],
-  weights: { fts: number; embedding: number },
+  weights: HybridWeights,
   topK: number,
 ): HybridSearchResult[] {
   const normalize = (results: Array<{ score: number }>): Map<number, number> => {
@@ -137,4 +135,15 @@ export function mergeByWeights(
   }
   results.sort((a, b) => b.score - a.score);
   return results.slice(0, topK);
+}
+
+export function mergeHybrid(
+  ftsResults: FullTextSearchResult[],
+  vecResults: EmbeddingSearchResult[],
+  topK: number,
+  weights?: HybridWeights,
+): HybridSearchResult[] {
+  return weights
+    ? mergeByWeights(ftsResults, vecResults, weights, topK)
+    : mergeByRRF(ftsResults, vecResults, topK);
 }

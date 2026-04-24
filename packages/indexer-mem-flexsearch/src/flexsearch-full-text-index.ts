@@ -9,6 +9,7 @@ import type {
   Metadata,
   PathSelector,
 } from "@statewalker/indexer-api";
+import { compositeKey, matchesPrefix, toAsyncIterable } from "@statewalker/indexer-core";
 import FlexSearch from "flexsearch";
 
 interface StoredBlock {
@@ -16,14 +17,6 @@ interface StoredBlock {
   blockId: string;
   content: string;
   metadata?: Metadata;
-}
-
-function compositeKey(path: DocumentPath, blockId: string): string {
-  return `${path}\0${blockId}`;
-}
-
-function matchesPrefix(path: DocumentPath, prefix: DocumentPath): boolean {
-  return path.startsWith(prefix);
 }
 
 export class FlexSearchFullTextIndex implements FullTextIndex {
@@ -180,7 +173,7 @@ export class FlexSearchFullTextIndex implements FullTextIndex {
     pathSelectors: PathSelector[] | AsyncIterable<PathSelector>,
   ): Promise<void> {
     this.ensureOpen();
-    for await (const sel of pathSelectors as AsyncIterable<PathSelector>) {
+    for await (const sel of toAsyncIterable(pathSelectors)) {
       if (sel.blockId !== undefined) {
         const key = compositeKey(sel.path, sel.blockId);
         this.removeByKey(key);
