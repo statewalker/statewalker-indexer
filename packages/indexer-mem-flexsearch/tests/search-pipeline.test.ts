@@ -1,12 +1,13 @@
-import { createFlexSearchIndexer } from "@statewalker/indexer-mem-flexsearch";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockCitationBuilder,
   createMockExpander,
   createMockReranker,
-} from "../../src/helpers/mock.js";
-import { SearchPipeline } from "../../src/helpers/search-pipeline.js";
-import type { DocumentPath, Index } from "../../src/indexer-index.js";
+  type DocumentPath,
+  type Index,
+  SearchPipeline,
+} from "@statewalker/indexer-api";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createFlexSearchIndexer } from "../src/index.js";
 
 let indexer: ReturnType<typeof createFlexSearchIndexer>;
 let index: Index;

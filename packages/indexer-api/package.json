@@ -32,7 +32,6 @@
     "format": "biome format --write ."
   },
   "devDependencies": {
-    "@statewalker/indexer-mem-flexsearch": "workspace:*",
     "rimraf": "catalog:",
     "tsdown": "catalog:",
     "typescript": "catalog:",

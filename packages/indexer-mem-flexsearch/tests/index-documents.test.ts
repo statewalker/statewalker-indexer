@@ -1,7 +1,10 @@
-import { createFlexSearchIndexer } from "@statewalker/indexer-mem-flexsearch";
+import {
+  type DocumentPath,
+  type Index,
+  indexDocuments,
+} from "@statewalker/indexer-api";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { indexDocuments } from "../../src/helpers/index-documents.js";
-import type { DocumentPath, Index } from "../../src/indexer-index.js";
+import { createFlexSearchIndexer } from "../src/index.js";
 
 let indexer: ReturnType<typeof createFlexSearchIndexer>;
 let index: Index;
