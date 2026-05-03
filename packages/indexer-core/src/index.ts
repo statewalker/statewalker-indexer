@@ -23,9 +23,17 @@ export {
   type SqlVectorDialect,
   type SqlVectorRetrieverOptions,
 } from "./create-sql-vector-retriever.js";
+export { type FanOutSearchParams, fanOutSearch } from "./fan-out-search.js";
 export { mergeByRRF, mergeByWeights, mergeHybrid } from "./merge.js";
 export { matchesPrefix } from "./path-prefix.js";
 export { readEntryBytes, singleChunk, toBytes } from "./persistence-bytes.js";
+export {
+  buildRrfTrace,
+  type RankedList,
+  type RRFContribution,
+  type RRFTrace,
+  reciprocalRankFusion,
+} from "./rrf.js";
 export { sanitizePrefix } from "./sanitize-prefix.js";
 export type { SqlDb } from "./sql-db.js";
 export { validateDimensionality } from "./validate-dimensionality.js";

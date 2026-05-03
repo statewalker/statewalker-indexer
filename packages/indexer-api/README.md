@@ -1,6 +1,6 @@
 # @statewalker/indexer-api
 
-Backend-agnostic TypeScript API for hybrid search indexes combining **full-text search (FTS)** and **vector/embedding similarity search**.
+Backend-agnostic TypeScript contract for hybrid search indexes combining **full-text search (FTS)** and **vector/embedding similarity search**.
 
 ## Why this API?
 
@@ -12,7 +12,7 @@ Modern search applications need more than keyword matching. They need to combine
 
 Each of these capabilities can be backed by very different storage engines — in-memory structures, SQLite/PGlite, DuckDB, or external services. Without a shared abstraction, application code becomes tightly coupled to a specific backend, making it hard to swap implementations, test in isolation, or run the same logic in different environments (browser, Node, edge).
 
-`@statewalker/indexer-api` solves this by defining a **pure-interface contract** with zero runtime dependencies. Application code programs against the API; concrete backends are injected at startup.
+`@statewalker/indexer-api` solves this by defining a **pure-interface contract** with **zero runtime exports**. Application code programs against the API; concrete backends are injected at startup. The strategy stack (search pipeline, query parser, semantic index, reranker blending, mocks) lives in [`@statewalker/indexer-search`](../indexer-search/README.md).
 
 ## How it works
 
@@ -31,15 +31,15 @@ Indexer          — registry/factory: creates, lists, deletes named indexes
 
 Every index provides a uniform contract (`SearchIndex<B, P, R>`) covering:
 
-| Capability    | Methods |
-|---------------|---------|
-| **Search**    | `search()` — async generator streaming scored results |
-| **Ingestion** | `addDocument()`, `addDocuments()` — single or bulk insert |
-| **Deletion**  | `deleteDocuments()` — by path prefix and/or block ID |
+| Capability      | Methods |
+|-----------------|---------|
+| **Search**      | `search()` — async generator streaming scored results |
+| **Ingestion**   | `addDocument()`, `addDocuments()` — single or bulk insert |
+| **Deletion**    | `deleteDocuments()` — by path prefix and/or block ID |
 | **Enumeration** | `getSize()`, `getDocumentPaths()`, `getDocumentBlocksRefs()`, `getDocumentsBlocks()` |
-| **Lifecycle** | `flush()`, `close()`, `deleteIndex()` |
+| **Lifecycle**   | `flush()`, `close()`, `deleteIndex()` |
 
-### Hybrid search & score fusion
+### Hybrid search
 
 Hybrid search accepts both FTS queries and embedding vectors simultaneously. Results from each modality are blended using configurable `HybridWeights`:
 
@@ -54,40 +54,9 @@ index.search({
 
 When only one modality is provided, the search gracefully degrades to single-modality mode.
 
-### Reciprocal Rank Fusion (RRF)
-
-The `reciprocalRankFusion()` function merges multiple ranked lists into a single ranking. It supports:
-
-- **Weighted lists** — each list can carry a weight that scales its contribution.
-- **Top-rank bonus** — items ranked #1 get a +0.05 bonus; ranks #2-3 get +0.02 (adapted from [QMD](https://github.com/tobi/qmd)).
-- **Tracing** — `buildRrfTrace()` returns per-item contribution breakdowns for debugging and explainability.
-
-### Reranker blending
-
-`blendWithReranker()` combines initial retrieval scores with reranker scores using position-aware tiers. Top-ranked items are protected by higher retrieval weights (default: 0.75 for top-3, 0.60 for top-10, 0.40 for the rest), preventing aggressive rerankers from destabilizing high-confidence results.
-
-### Multi-search
-
-`defaultMultiSearch()` fans out multiple queries and embeddings into independent searches, then fuses them with RRF. It tracks `matchCount` (how many input queries matched each result) and supports grouping results by document path for organized output.
-
-### Query parsing
-
-`parseStructuredQuery()` parses typed search instructions with prefixes:
-
-- `lex:` — lexical/keyword query
-- `vec:` — vector/semantic query
-- `hyde:` — hypothetical document embedding query
-- `expand:` — pass-through (returns `null` for default pipeline handling)
-
-Validators (`validateLexQuery`, `validateSemanticQuery`) catch malformed queries before they reach the backend.
-
-### Intent disambiguation
-
-`extractIntentTerms()` strips stop-words from a user's intent description, and `selectBestChunk()` uses both query terms and intent terms to pick the most relevant text chunk — useful for snippet extraction and context selection.
-
 ### Path-prefix filtering
 
-Documents are organized under hierarchical paths (`"/projects/alpha/specs/"`). All search, enumeration, and deletion operations accept optional path prefixes to restrict their scope. For example, passing `paths: ["/docs/"]` to `index.search(...)` limits results to documents whose path starts with `"/docs/"`. Prefix matching is a simple `startsWith` at the type level — backends implement it using their native SQL (DuckDB / PGlite) or in-memory filtering (indexer-mem-*).
+Documents are organized under hierarchical paths (`"/projects/alpha/specs/"`). All search, enumeration, and deletion operations accept optional path prefixes to restrict their scope. For example, passing `paths: ["/docs/"]` to `index.search(...)` limits results to documents whose path starts with `"/docs/"`. Prefix matching is a simple `startsWith` at the type level — backends implement it using their native SQL (DuckDB / PGlite) or in-memory filtering (`indexer-mem-*`).
 
 ### Persistence
 
@@ -100,17 +69,13 @@ interface IndexerPersistence {
 }
 ```
 
-### SemanticIndex convenience wrapper
+### Ranking primitive
 
-`SemanticIndex` wraps an `Index` and an `EmbedFn` to automatically compute embeddings at ingestion and search time. Application code provides plain text; the wrapper handles embedding generation transparently.
+`ScoredItem = { blockId: string; score: number }` is a small primitive shape shared between the backend toolkit (`@statewalker/indexer-core`'s RRF) and the strategy stack (`@statewalker/indexer-search`'s reranker blending). Living here keeps both consumers free of cross-package coupling.
 
-### SearchPipeline
+### Embedding boundary
 
-`SearchPipeline` is a builder/executor for multi-stage search with optional LLM-powered stages. It chains: **expand** (query expansion) → **embed** (semantic query embedding) → **search** (single `index.search()` call) → **rerank** (score blending) → **cite** (citation extraction). Each LLM stage is defined as a function type (`QueryExpanderFn`, `RerankerFn`, `CitationBuilderFn`) — no class instantiation required, just pass closures.
-
-### indexDocuments utility
-
-`indexDocuments()` is a convenience function for batch document ingestion with optional auto-embedding. It accepts a sync or async iterable of documents and an optional `embedFn`, and returns a count of indexed documents.
+`EmbedFn = (text: string) => Promise<Float32Array>` is the boundary type at which the application provides an embedding capability to the indexer. Both backends (via test fixtures) and the strategy stack consume it.
 
 ## Implementations / backends
 
@@ -126,6 +91,7 @@ Supporting packages:
 
 | Package | Purpose |
 |---------|---------|
+| `@statewalker/indexer-search` | Application-side strategy stack (`SearchPipeline`, `SemanticIndex`, query parser, reranker blending, mocks) |
 | `@statewalker/indexer-chunker` | Markdown splitting and code fence detection for content preprocessing |
 
 ## How to use
@@ -195,104 +161,8 @@ for await (const result of index.search({
 }
 ```
 
-### Using SemanticIndex for automatic embedding
-
-```ts
-import { SemanticIndex } from "@statewalker/indexer-api";
-
-const semantic = new SemanticIndex(index, embed);
-
-// Embedding computed automatically from content
-await semantic.addDocument({
-  path: "/docs/guide/",
-  blockId: "ch1",
-  content: "Chapter 1: Introduction...",
-});
-
-// Search with automatic query embedding
-const results = await semantic.search({
-  query: "introduction",
-  topK: 5,
-});
-```
-
-### Multi-search with RRF fusion
-
-```ts
-import { defaultMultiSearch } from "@statewalker/indexer-api";
-
-const results = await defaultMultiSearch(index, {
-  queries: ["CAP theorem", "consistency models"],
-  embeddings: [await embed("distributed systems trade-offs")],
-  topK: 10,
-  weights: { fts: 0.6, embedding: 0.4 },
-});
-```
-
-### Structured queries
-
-```ts
-import { parseStructuredQuery } from "@statewalker/indexer-api";
-
-const parsed = parseStructuredQuery("lex: CAP theorem\nvec: consensus algorithms");
-// [{ type: "lex", query: "CAP theorem" }, { type: "vec", query: "consensus algorithms" }]
-```
-
-### SearchPipeline
-
-```ts
-import { SearchPipeline } from "@statewalker/indexer-api";
-
-const results = await new SearchPipeline({
-  index,
-  embedFn: embed,
-  expander: async (query) => [
-    { type: "lex", query },
-    { type: "vec", query: `semantic: ${query}` },
-  ],
-  reranker: async (query, candidates) =>
-    candidates.map((c, i) => ({ blockId: c.blockId, score: 1 / (i + 1) })),
-})
-  .setPrompt("distributed consensus")
-  .setTopK(10)
-  .execute();
-```
-
-### Batch indexing with indexDocuments
-
-```ts
-import { indexDocuments } from "@statewalker/indexer-api";
-
-const { indexed } = await indexDocuments(index, [
-  { path: "/docs/", blockId: "b1", content: "First document..." },
-  { path: "/docs/", blockId: "b2", content: "Second document..." },
-], { embedFn: embed });
-```
+For application-side ergonomics (auto-embedding, query expansion, reranking, citations, structured query parsing, intent extraction), see [`@statewalker/indexer-search`](../indexer-search/README.md).
 
 ## How it is tested
 
-Tests use **vitest** and live in `test/`, mirroring the `src/` structure. The package has **7 test suites** covering the pure-logic modules:
-
-| Test file | What it covers |
-|-----------|----------------|
-| `test/rrf.test.ts` | RRF score computation, weighted lists, top-rank bonuses, trace correctness |
-| `test/reranker-blend.test.ts` | Position-aware blending, tier boundaries, re-ordering, custom tiers, edge cases |
-| `test/query-parser.test.ts` | Structured query parsing (`lex:/vec:/hyde:/expand:`), validation, error cases |
-| `test/intent.test.ts` | Stop-word filtering, intent term extraction, chunk selection with intent weighting |
-| `test/helpers/search-pipeline.test.ts` | SearchPipeline builder, FTS execution, expansion, reranking, citations, explain traces, error handling |
-| `test/helpers/mock.test.ts` | Mock expander, reranker, and citation builder factory functions |
-| `test/helpers/index-documents.test.ts` | Batch indexing utility with sync/async iterables and auto-embedding |
-
-The interface types (`Indexer`, `Index`, `FullTextIndex`, `EmbeddingIndex`) are not tested here — they are pure TypeScript interfaces with no runtime behavior. Each backend package (`indexer-mem`, `indexer-pglite`, `indexer-duckdb`, etc.) has its own integration test suite that validates conformance to these interfaces.
-
-Run tests:
-
-```bash
-# Run once
-pnpm test
-
-# Watch mode
-pnpm test:watch
-```
-
-Several algorithms (RRF, query parser, intent extraction, reranker blending) are adapted from [QMD](https://github.com/tobi/qmd) by Tobi Lutke (MIT License).
+`@statewalker/indexer-api` is contract-only — it has no runtime to test. Conformance to the contract is validated per backend in `@statewalker/indexer-tests` (the cross-backend conformance runner) and in each backend package's own integration suite.

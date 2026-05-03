@@ -38,6 +38,7 @@
     "flexsearch": "catalog:"
   },
   "devDependencies": {
+    "@statewalker/indexer-search": "workspace:*",
     "@statewalker/indexer-tests": "workspace:*",
     "rimraf": "catalog:",
     "tsdown": "catalog:",

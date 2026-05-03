@@ -1,11 +1,10 @@
+import type { DocumentPath, Index } from "@statewalker/indexer-api";
 import {
   createMockCitationBuilder,
   createMockExpander,
   createMockReranker,
-  type DocumentPath,
-  type Index,
   SearchPipeline,
-} from "@statewalker/indexer-api";
+} from "@statewalker/indexer-search";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFlexSearchIndexer } from "../src/index.js";
 

@@ -1,13 +1,11 @@
-import type { BlockId } from "../indexer-index.js";
-import type { ScoredItem } from "../rrf.js";
+import type { BlockId, ScoredItem } from "@statewalker/indexer-api";
 import type {
   Citation,
   CitationBuilderFn,
   ExpandedQuery,
   QueryExpanderFn,
   RerankerFn,
-  RerankResult,
-} from "./types.js";
+} from "./fn-types.js";
 
 export function createMockExpander(): QueryExpanderFn {
   return async (
@@ -34,8 +32,8 @@ export function createMockReranker(scoreMap?: Map<BlockId, number>): RerankerFn 
     _query: string,
     candidates: Array<{ blockId: BlockId; text: string }>,
     options?: { topK?: number },
-  ): Promise<RerankResult[]> => {
-    const results: RerankResult[] = candidates.map((c, i) => ({
+  ): Promise<ScoredItem[]> => {
+    const results: ScoredItem[] = candidates.map((c, i) => ({
       blockId: c.blockId,
       score: scoreMap?.get(c.blockId) ?? 1 / (i + 1),
     }));
