@@ -1,14 +1,13 @@
 import type {
   DocumentPath,
+  EmbedFn,
   HybridSearchResult,
   HybridWeights,
   Index,
   IndexedBlock,
   Metadata,
   PathSelector,
-} from "./indexer-index.js";
-
-export type EmbedFn = (text: string) => Promise<Float32Array>;
+} from "@statewalker/indexer-api";
 
 export class SemanticIndex {
   readonly index: Index;

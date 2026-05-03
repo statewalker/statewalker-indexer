@@ -1,9 +1,14 @@
 {
-  "name": "@statewalker/indexer-tests",
-  "version": "0.0.0",
-  "private": true,
+  "name": "@statewalker/indexer-search",
+  "version": "0.1.0",
+  "private": false,
   "type": "module",
-  "description": "Shared test suite for @statewalker/indexer-* implementations. Internal dev-only; not published.",
+  "description": "Application-side search-orchestration stack: SearchPipeline, SemanticIndex, query parser, intent extraction, reranker blending, and mock factories built on @statewalker/indexer-api.",
+  "homepage": "https://github.com/statewalker/statewalker-indexer",
+  "author": {
+    "name": "Mikhail Kotelnikov",
+    "email": "mikhail.kotelnikov@gmail.com"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -27,16 +32,16 @@
     "format": "biome format --write ."
   },
   "dependencies": {
-    "@statewalker/indexer-api": "workspace:*",
-    "@statewalker/indexer-search": "workspace:*"
-  },
-  "peerDependencies": {
-    "vitest": "*"
+    "@statewalker/indexer-api": "workspace:*"
   },
   "devDependencies": {
     "rimraf": "catalog:",
     "tsdown": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
   }
 }

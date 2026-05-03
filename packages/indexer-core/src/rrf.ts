@@ -5,11 +5,7 @@
  * MIT License — Copyright (c) 2024-2026 Tobi Lutke.
  */
 
-/** Minimal scored item — any object with blockId and score works. */
-export interface ScoredItem {
-  blockId: string;
-  score: number;
-}
+import type { ScoredItem } from "@statewalker/indexer-api";
 
 export interface RankedList {
   results: ScoredItem[];

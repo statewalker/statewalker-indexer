@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  createMockCitationBuilder,
-  createMockExpander,
-  createMockReranker,
-} from "../../src/helpers/mock.js";
+import { createMockCitationBuilder, createMockExpander, createMockReranker } from "../src/mock.js";
 
 describe("createMockExpander", () => {
   it("returns deterministic lex expansion for any query", async () => {

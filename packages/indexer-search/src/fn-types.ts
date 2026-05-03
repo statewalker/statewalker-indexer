@@ -1,15 +1,9 @@
-import type { BlockId } from "../indexer-index.js";
-import type { QueryType } from "../query-parser.js";
-import type { ScoredItem } from "../rrf.js";
+import type { BlockId, ScoredItem } from "@statewalker/indexer-api";
+import type { QueryType } from "./query-parser.js";
 
 export interface ExpandedQuery {
   type: QueryType;
   query: string;
-}
-
-export interface RerankResult {
-  blockId: BlockId;
-  score: number;
 }
 
 export interface Citation {
@@ -31,7 +25,7 @@ export type RerankerFn = (
   query: string,
   candidates: Array<{ blockId: BlockId; text: string }>,
   options?: { topK?: number },
-) => Promise<RerankResult[]>;
+) => Promise<ScoredItem[]>;
 
 export type CitationBuilderFn = (
   query: string,

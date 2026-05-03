@@ -1,4 +1,5 @@
-import type { Index, Metadata } from "./indexer-index.js";
+import type { Index } from "./contract/index.js";
+import type { Metadata } from "./contract/types.js";
 
 /**
  * Parameters for creating a new hybrid search index.

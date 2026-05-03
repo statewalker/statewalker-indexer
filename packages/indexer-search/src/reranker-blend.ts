@@ -5,7 +5,7 @@
  * MIT License — Copyright (c) 2024-2026 Tobi Lutke.
  */
 
-import type { ScoredItem } from "./rrf.js";
+import type { ScoredItem } from "@statewalker/indexer-api";
 
 export interface BlendTier {
   maxRank: number;

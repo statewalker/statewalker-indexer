@@ -6,6 +6,7 @@ import type {
   HybridWeights,
 } from "@statewalker/indexer-api";
 import { compositeKey } from "./composite-key.js";
+import { type RankedList, reciprocalRankFusion } from "./rrf.js";
 
 export function mergeByRRF(
   ftsResults: FullTextSearchResult[],
@@ -13,43 +14,45 @@ export function mergeByRRF(
   topK: number,
   k = 60,
 ): HybridSearchResult[] {
-  const scores = new Map<string, number>();
   const ftsMap = new Map<string, FullTextSearchResult>();
   const vecMap = new Map<string, EmbeddingSearchResult>();
   const pathMap = new Map<string, DocumentPath>();
   const blockIdMap = new Map<string, string>();
 
-  for (let i = 0; i < ftsResults.length; i++) {
-    const r = ftsResults[i];
+  const ftsList: { blockId: string; score: number }[] = [];
+  for (const r of ftsResults) {
     if (!r) continue;
     const key = compositeKey(r.path, r.blockId);
-    scores.set(key, (scores.get(key) ?? 0) + 1 / (k + i + 1));
     ftsMap.set(key, r);
     pathMap.set(key, r.path);
     blockIdMap.set(key, r.blockId);
+    ftsList.push({ blockId: key, score: r.score });
   }
-  for (let i = 0; i < vecResults.length; i++) {
-    const r = vecResults[i];
+
+  const vecList: { blockId: string; score: number }[] = [];
+  for (const r of vecResults) {
     if (!r) continue;
     const key = compositeKey(r.path, r.blockId);
-    scores.set(key, (scores.get(key) ?? 0) + 1 / (k + i + 1));
     vecMap.set(key, r);
     if (!pathMap.has(key)) pathMap.set(key, r.path);
     if (!blockIdMap.has(key)) blockIdMap.set(key, r.blockId);
+    vecList.push({ blockId: key, score: r.score });
   }
 
-  const results: HybridSearchResult[] = [];
-  for (const [key, score] of scores) {
-    results.push({
-      path: pathMap.get(key) as DocumentPath,
-      blockId: blockIdMap.get(key) as string,
-      score,
-      fts: ftsMap.get(key) ?? null,
-      embedding: vecMap.get(key) ?? null,
-    });
-  }
-  results.sort((a, b) => b.score - a.score);
-  return results.slice(0, topK);
+  const lists: RankedList[] = [
+    { results: ftsList, meta: { source: "fts", queryType: "lex", query: "" } },
+    { results: vecList, meta: { source: "vec", queryType: "vec", query: "" } },
+  ];
+
+  const fused = reciprocalRankFusion(lists, topK, k);
+
+  return fused.map((item) => ({
+    path: pathMap.get(item.blockId) as DocumentPath,
+    blockId: blockIdMap.get(item.blockId) as string,
+    score: item.score,
+    fts: ftsMap.get(item.blockId) ?? null,
+    embedding: vecMap.get(item.blockId) ?? null,
+  }));
 }
 
 export function mergeByWeights(

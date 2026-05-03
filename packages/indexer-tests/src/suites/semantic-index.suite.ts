@@ -1,5 +1,5 @@
 import type { Indexer } from "@statewalker/indexer-api";
-import { SemanticIndex } from "@statewalker/indexer-api";
+import { SemanticIndex } from "@statewalker/indexer-search";
 import { describe, expect, it, vi } from "vitest";
 import {
   createFixtureEmbedFn,

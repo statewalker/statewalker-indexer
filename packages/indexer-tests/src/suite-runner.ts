@@ -8,7 +8,6 @@ import { runIndexSuite } from "./suites/index.suite.js";
 import { runIndexerSuite } from "./suites/indexer.suite.js";
 import { runLifecycleSuite } from "./suites/lifecycle.suite.js";
 import { runMultiIndexerIsolationSuite } from "./suites/multi-indexer-isolation.suite.js";
-import { runMultiSearchSuite } from "./suites/multi-search.suite.js";
 import { runPersistenceSuite } from "./suites/persistence.suite.js";
 import { runSearchQualitySuite } from "./suites/search-quality.suite.js";
 import { runSemanticIndexSuite } from "./suites/semantic-index.suite.js";
@@ -49,7 +48,6 @@ export function runIndexerTestSuite(name: string, factory: IndexerFactory): void
     runErrorHandlingSuite(() => indexer);
 
     runSearchQualitySuite(() => indexer);
-    runMultiSearchSuite(() => indexer);
     runMultiIndexerIsolationSuite(factory.create);
 
     if (factory.createWithPersistence) {

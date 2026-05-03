@@ -1,6 +1,6 @@
+import type { ScoredItem } from "@statewalker/indexer-api";
 import { describe, expect, it } from "vitest";
 import { type BlendTier, blendWithReranker, DEFAULT_BLEND_TIERS } from "../src/reranker-blend.js";
-import type { ScoredItem } from "../src/rrf.js";
 
 describe("blendWithReranker", () => {
   // ---------------------------------------------------------------------------
