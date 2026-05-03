@@ -1,4 +1,5 @@
 import type { Db } from "@statewalker/db-api";
+import type { DocumentPath } from "@statewalker/indexer-api";
 import type {
   SqlBackedDialect,
   SqlDb,
@@ -10,7 +11,8 @@ import type {
 export function wrapDbAsSqlDb(db: Db): SqlDb {
   return {
     exec: (sql) => db.exec(sql),
-    query: <T>(sql: string, params?: unknown[]) => db.query<T>(sql, params ?? []),
+    query: <T>(sql: string, params?: unknown[]) =>
+      db.query<T>(sql, params ?? []),
   };
 }
 
@@ -108,7 +110,7 @@ export const duckdbFtsDialect: SqlFtsDialect = {
     }>(sql, allParams);
 
     return rows.map((row) => ({
-      path: row.path as import("@statewalker/indexer-api").DocumentPath,
+      path: row.path as DocumentPath,
       blockId: row.block_id,
       content: row.content,
       score: row.score,
@@ -163,13 +165,17 @@ export const duckdbVectorDialect: SqlVectorDialect = {
     const topKParam = `$${allParams.length + 1}`;
     allParams.push(topK);
 
-    const rows = await db.query<{ path: string; block_id: string; dist: number }>(
+    const rows = await db.query<{
+      path: string;
+      block_id: string;
+      dist: number;
+    }>(
       `SELECT d.path, b.block_id, array_cosine_distance(b.embedding, $1${embeddingCastSuffix(dim)}) AS dist FROM ${tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id ${pathClause}ORDER BY dist ASC LIMIT ${topKParam}`,
       allParams,
     );
 
     return rows.map((row) => ({
-      path: row.path as import("@statewalker/indexer-api").DocumentPath,
+      path: row.path as DocumentPath,
       blockId: row.block_id,
       score: 1 - row.dist,
     }));
