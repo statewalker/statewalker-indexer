@@ -12,6 +12,7 @@ import type {
 } from "@statewalker/indexer-api";
 import { createCompositeIndex } from "./create-composite-index.js";
 import { readEntryBytes, singleChunk, toBytes } from "./persistence-bytes.js";
+import { createSerialiser } from "./run-exclusive.js";
 
 /** Stored per-index config for the persistence-backed wire format. */
 interface StoredIndexConfig {
@@ -66,6 +67,7 @@ export function createPersistenceBackedIndexer<F extends FullTextIndex, V extend
   let initPromise: Promise<void> | null = null;
 
   const persistence = opts.persistence;
+  const runExclusive = createSerialiser();
 
   function ensureOpen(): void {
     if (closed) throw new Error("Indexer is closed");
@@ -182,41 +184,43 @@ export function createPersistenceBackedIndexer<F extends FullTextIndex, V extend
       return [...manifest.values()];
     },
 
-    async createIndex(params: CreateIndexParams): Promise<Index> {
-      ensureOpen();
-      await ensureInitialized();
-      const { name, fulltext, vector, overwrite } = params;
+    createIndex(params: CreateIndexParams): Promise<Index> {
+      return runExclusive(async () => {
+        ensureOpen();
+        await ensureInitialized();
+        const { name, fulltext, vector, overwrite } = params;
 
-      if (!fulltext && !vector) {
-        throw new Error("At least one of fulltext or vector must be provided");
-      }
-
-      if (indexes.has(name)) {
-        if (overwrite) {
-          const old = indexes.get(name);
-          await old?.close();
-          indexes.delete(name);
-          ftsInstances.delete(name);
-          vecInstances.delete(name);
-          manifest.delete(name);
-          configs.delete(name);
-        } else {
-          throw new Error(`Index "${name}" already exists`);
+        if (!fulltext && !vector) {
+          throw new Error("At least one of fulltext or vector must be provided");
         }
-      }
 
-      const fts = fulltext ? opts.createFts(fulltext) : null;
-      if (fts) ftsInstances.set(name, fts);
+        if (indexes.has(name)) {
+          if (overwrite) {
+            const old = indexes.get(name);
+            await old?.close();
+            indexes.delete(name);
+            ftsInstances.delete(name);
+            vecInstances.delete(name);
+            manifest.delete(name);
+            configs.delete(name);
+          } else {
+            throw new Error(`Index "${name}" already exists`);
+          }
+        }
 
-      const vec = vector ? opts.createVec(vector) : null;
-      if (vec) vecInstances.set(name, vec);
+        const fts = fulltext ? opts.createFts(fulltext) : null;
+        if (fts) ftsInstances.set(name, fts);
 
-      const index = createCompositeIndex({ name, fts, vec });
-      indexes.set(name, index);
-      manifest.set(name, { name });
-      configs.set(name, { name, fulltext, vector });
+        const vec = vector ? opts.createVec(vector) : null;
+        if (vec) vecInstances.set(name, vec);
 
-      return index;
+        const index = createCompositeIndex({ name, fts, vec });
+        indexes.set(name, index);
+        manifest.set(name, { name });
+        configs.set(name, { name, fulltext, vector });
+
+        return index;
+      });
     },
 
     async getIndex(name: string): Promise<Index | null> {

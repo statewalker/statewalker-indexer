@@ -27,6 +27,7 @@ export { mergeByRRF, mergeByWeights } from "./merge.js";
 export { matchesPrefix } from "./path-prefix.js";
 export { readEntryBytes, singleChunk, toBytes } from "./persistence-bytes.js";
 export { type RankedList, reciprocalRankFusion } from "./rrf.js";
+export { createSerialiser } from "./run-exclusive.js";
 export { sanitizePrefix } from "./sanitize-prefix.js";
 export type { SqlDb } from "./sql-db.js";
 export {

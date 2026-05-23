@@ -185,6 +185,7 @@ export const pgliteDialect: SqlBackedDialect = {
     ];
   },
   unionAliasSuffix: " AS combined",
+  supportsDDLInTransaction: true,
   fts: pgliteFtsDialect,
   vec: pgliteVectorDialect,
 };
