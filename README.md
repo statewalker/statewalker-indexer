@@ -16,6 +16,7 @@ Indexing primitives: pluggable full-text and vector indexers (in-memory, DuckDB,
 | [@statewalker/indexer-mem-minisearch](packages/indexer-mem-minisearch) | MiniSearch + `MemVectorIndex` + optional persistence. | yes |
 | [@statewalker/indexer-duckdb](packages/indexer-duckdb) | DuckDB backend: real BM25 FTS (`fts` extension) + HNSW cosine vector (`vss` extension). | yes |
 | [@statewalker/indexer-pglite](packages/indexer-pglite) | PGlite backend: `tsvector`/GIN FTS + `pgvector` HNSW cosine. | yes |
+| [@statewalker/indexer-search](packages/indexer-search) | Workspace-internal app-side search-orchestration stack (SearchPipeline, embed helpers, reranker blending, mocks). QMD-port utilities live under `./utils`. | no |
 | [@statewalker/indexer-tests](packages/indexer-tests) | Shared Vitest conformance suite run by every backend. | no |
 
 ## Development

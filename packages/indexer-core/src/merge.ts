@@ -139,14 +139,3 @@ export function mergeByWeights(
   results.sort((a, b) => b.score - a.score);
   return results.slice(0, topK);
 }
-
-export function mergeHybrid(
-  ftsResults: FullTextSearchResult[],
-  vecResults: EmbeddingSearchResult[],
-  topK: number,
-  weights?: HybridWeights,
-): HybridSearchResult[] {
-  return weights
-    ? mergeByWeights(ftsResults, vecResults, weights, topK)
-    : mergeByRRF(ftsResults, vecResults, topK);
-}

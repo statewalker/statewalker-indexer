@@ -1,9 +1,9 @@
 {
   "name": "@statewalker/indexer-search",
   "version": "0.1.0",
-  "private": false,
+  "private": true,
   "type": "module",
-  "description": "Application-side search-orchestration stack: SearchPipeline, SemanticIndex, query parser, intent extraction, reranker blending, and mock factories built on @statewalker/indexer-api.",
+  "description": "Workspace-internal app-side search-orchestration stack: SearchPipeline + embedAndAdd/embedAndSearch helpers + reranker blending + mock factories. QMD-port query/intent utilities live under the secondary ./utils sub-export.",
   "homepage": "https://github.com/statewalker/statewalker-indexer",
   "author": {
     "name": "Mikhail Kotelnikov",
@@ -15,7 +15,8 @@
     "url": "git+ssh://git@github.com/statewalker/statewalker-indexer.git"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./utils": "./src/utils/index.ts"
   },
   "files": [
     "dist",

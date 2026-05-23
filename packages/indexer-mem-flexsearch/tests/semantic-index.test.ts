@@ -1,5 +1,5 @@
 import type { DocumentPath, EmbedFn, Index } from "@statewalker/indexer-api";
-import { SemanticIndex } from "@statewalker/indexer-search";
+import { embedAndAdd } from "@statewalker/indexer-search";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createFlexSearchIndexer } from "../src/index.js";
 
@@ -20,21 +20,19 @@ afterEach(async () => {
   await indexer.close();
 });
 
-describe("SemanticIndex.addDocuments (FTS-only backend)", () => {
+describe("embedAndAdd (FTS-only backend)", () => {
   it("ingests documents from a sync iterable", async () => {
-    const semantic = new SemanticIndex(index, noopEmbed);
     const docs = [
       { path: "/docs/" as DocumentPath, blockId: "b1", content: "hello world" },
       { path: "/docs/" as DocumentPath, blockId: "b2", content: "foo bar" },
     ];
 
-    await semantic.addDocuments(docs);
+    await embedAndAdd(index, noopEmbed, docs);
     expect(await index.getSize()).toBe(2);
   });
 
   it("ingested documents are searchable", async () => {
-    const semantic = new SemanticIndex(index, noopEmbed);
-    await semantic.addDocuments([
+    await embedAndAdd(index, noopEmbed, [
       { path: "/docs/" as DocumentPath, blockId: "b1", content: "quantum mechanics physics" },
     ]);
 
@@ -47,18 +45,17 @@ describe("SemanticIndex.addDocuments (FTS-only backend)", () => {
   });
 
   it("ingests documents from an async iterable", async () => {
-    const semantic = new SemanticIndex(index, noopEmbed);
     async function* generateDocs() {
       yield { path: "/docs/" as DocumentPath, blockId: "a1", content: "async document one" };
       yield { path: "/docs/" as DocumentPath, blockId: "a2", content: "async document two" };
     }
 
-    await semantic.addDocuments(generateDocs());
+    await embedAndAdd(index, noopEmbed, generateDocs());
     expect(await index.getSize()).toBe(2);
   });
 });
 
-describe("SemanticIndex.addDocuments (FTS + vector backend)", () => {
+describe("embedAndAdd (FTS + vector backend)", () => {
   it("calls embed for every document", async () => {
     const indexerWithVec = createFlexSearchIndexer();
     const vecIndex = await indexerWithVec.createIndex({
@@ -73,8 +70,7 @@ describe("SemanticIndex.addDocuments (FTS + vector backend)", () => {
       return new Float32Array([0.1, 0.2, 0.3]);
     };
 
-    const semantic = new SemanticIndex(vecIndex, embed);
-    await semantic.addDocuments([
+    await embedAndAdd(vecIndex, embed, [
       { path: "/docs/" as DocumentPath, blockId: "e1", content: "embedding test" },
     ]);
 
