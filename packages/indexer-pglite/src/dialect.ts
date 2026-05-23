@@ -5,6 +5,7 @@ import type {
   SqlFtsDialect,
   SqlVectorDialect,
 } from "@statewalker/indexer-core";
+import { buildPathPrefixesSql } from "@statewalker/indexer-core";
 
 /** Adapt `@electric-sql/pglite`'s `PGlite` to `@statewalker/indexer-core`'s minimal `SqlDb`. */
 export function wrapDbAsSqlDb(db: PGlite): SqlDb {
@@ -36,8 +37,18 @@ const LANGUAGE_MAP: Record<string, string> = {
   simple: "simple",
 };
 
+// Postgres text-search configuration names that have always-on availability;
+// any value outside this set is interpolated into DDL/queries and must be a
+// whitelisted identifier — never user-controlled free-form text.
+const KNOWN_PG_CONFIGS: ReadonlySet<string> = new Set(Object.values(LANGUAGE_MAP));
+
 function resolvePgLanguage(lang: string): string {
-  return LANGUAGE_MAP[lang] ?? lang;
+  const mapped = LANGUAGE_MAP[lang];
+  if (mapped) return mapped;
+  if (KNOWN_PG_CONFIGS.has(lang)) return lang;
+  throw new Error(
+    `pglite FTS: unsupported language "${lang}" (must be an ISO-639-1 code or a Postgres text-search config name)`,
+  );
 }
 
 /**
@@ -65,10 +76,12 @@ export const pgliteFtsDialect: SqlFtsDialect = {
 
   async search({ db, tableName, docsTable, info, query, paths, topK }) {
     const pgLang = resolvePgLanguage(info.language);
+    // Strip only tsquery-significant punctuation; keep Unicode letters/digits so
+    // non-ASCII languages (Russian, French, CJK, …) reach the FTS engine intact.
     const validWords = query
       .toLowerCase()
       .split(/\s+/)
-      .map((w) => w.replace(/[^a-zA-Z0-9]/g, ""))
+      .map((w) => w.replace(/[&|!():'"\\]/g, ""))
       .filter((w) => w.length > 0);
     if (validWords.length === 0) return [];
 
@@ -77,9 +90,9 @@ export const pgliteFtsDialect: SqlFtsDialect = {
     const allParams: unknown[] = [orTerms];
     let pathClause = "";
     if (paths && paths.length > 0) {
-      const pathOffset = allParams.length + 1;
-      pathClause = ` AND (${paths.map((_, i) => `d.path LIKE $${pathOffset + i} || '%'`).join(" OR ")})`;
-      allParams.push(...(paths as string[]));
+      const cond = buildPathPrefixesSql("d.path", paths as string[], allParams.length + 1);
+      pathClause = ` AND ${cond.sql}`;
+      allParams.push(...cond.params);
     }
 
     const topKParam = `$${allParams.length + 1}`;
@@ -137,9 +150,9 @@ export const pgliteVectorDialect: SqlVectorDialect = {
     const allParams: unknown[] = [vecLiteral];
     let pathClause = "";
     if (paths && paths.length > 0) {
-      const pathOffset = allParams.length + 1;
-      pathClause = `WHERE ${paths.map((_, i) => `d.path LIKE $${pathOffset + i} || '%'`).join(" OR ")} `;
-      allParams.push(...(paths as string[]));
+      const cond = buildPathPrefixesSql("d.path", paths as string[], allParams.length + 1);
+      pathClause = `WHERE ${cond.sql} `;
+      allParams.push(...cond.params);
     }
 
     const topKParam = `$${allParams.length + 1}`;

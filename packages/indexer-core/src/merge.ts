@@ -74,7 +74,11 @@ export function mergeByWeights(
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
       if (!r) continue;
-      map.set(i, range === 0 ? 1 : (r.score - min) / range);
+      // When every input scored equally, min–max normalisation is undefined.
+      // Falling back to 1.0 for every entry erases the retrieval ranking; instead
+      // synthesise a decaying score from the original position so the upstream
+      // order survives the blend.
+      map.set(i, range === 0 ? 1 / (i + 1) : (r.score - min) / range);
     }
     return map;
   };

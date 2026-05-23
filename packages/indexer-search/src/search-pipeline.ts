@@ -188,53 +188,64 @@ export class SearchPipeline {
         : {}),
     }));
 
+    // Resolve actual block content once for downstream stages (rerank + cite).
+    const fts = index.getFullTextIndex();
+    const contentByBlockId = new Map<string, string>();
+    if (fts && entries.length > 0) {
+      const wanted = new Set(entries.map((e) => e.blockId));
+      const prefixes = new Set(entries.map((e) => e.path));
+      for (const prefix of prefixes) {
+        for await (const block of fts.getDocumentsBlocks(prefix)) {
+          if (wanted.has(block.blockId)) {
+            contentByBlockId.set(block.blockId, block.content);
+          }
+        }
+      }
+    }
+    const contentFor = (blockId: string): string => contentByBlockId.get(blockId) ?? "";
+
     // 4. RERANK
     if (reranker && entries.length > 0) {
       const queryForRerank = this._prompt ?? lexQueries[0] ?? vecQueries[0] ?? "";
-      try {
-        const candidates = entries.map((e) => ({
-          blockId: e.blockId,
-          text: e.blockId,
-        }));
-        const rerankResults = await reranker(queryForRerank, candidates);
-        const rerankScores = new Map(rerankResults.map((r) => [r.blockId, r.score]));
-        const blended = blendWithReranker(entries, rerankScores, blendTiers);
-        entries = blended.map((r) => {
-          const existing = entries.find((e) => e.blockId === r.blockId);
-          return {
-            blockId: r.blockId,
-            path: existing?.path ?? ("/" as DocumentPath),
-            score: r.score,
-            ...(this._explain && existing?.explain
-              ? {
-                  explain: {
-                    ...existing.explain,
-                    rerankScore: rerankScores.get(r.blockId),
-                    blendedScore: r.score,
-                  },
-                }
-              : {}),
-          };
-        });
-      } catch {
-        // Reranker failure — return retrieval results without blending
-      }
+      const entryByBlockId = new Map(entries.map((e) => [e.blockId, e]));
+      const candidates = entries.map((e) => ({
+        blockId: e.blockId,
+        text: contentFor(e.blockId),
+      }));
+      const rerankResults = await reranker(queryForRerank, candidates);
+      const rerankScores = new Map(rerankResults.map((r) => [r.blockId, r.score]));
+      const blended = blendWithReranker(entries, rerankScores, blendTiers);
+      entries = blended.map((r) => {
+        const existing = entryByBlockId.get(r.blockId);
+        return {
+          blockId: r.blockId,
+          path: existing?.path ?? ("/" as DocumentPath),
+          score: r.score,
+          ...(this._explain && existing?.explain
+            ? {
+                explain: {
+                  ...existing.explain,
+                  rerankScore: rerankScores.get(r.blockId),
+                  blendedScore: r.score,
+                },
+              }
+            : {}),
+        };
+      });
     }
 
     // 5. CITE
     if (citationBuilder && !this._skip.has("citations") && entries.length > 0) {
       const queryForCite = this._prompt ?? lexQueries[0] ?? vecQueries[0] ?? "";
-      try {
-        const citations = await citationBuilder(queryForCite, entries, async (blockId) => blockId);
-        const citationMap = new Map(citations.map((c) => [c.blockId, c]));
-        for (const entry of entries) {
-          const cit = citationMap.get(entry.blockId);
-          if (cit) {
-            entry.citation = cit;
-          }
+      const citations = await citationBuilder(queryForCite, entries, async (blockId) =>
+        contentFor(blockId),
+      );
+      const citationMap = new Map(citations.map((c) => [c.blockId, c]));
+      for (const entry of entries) {
+        const cit = citationMap.get(entry.blockId);
+        if (cit) {
+          entry.citation = cit;
         }
-      } catch {
-        // Citation failure — continue without citations
       }
     }
 
