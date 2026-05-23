@@ -4,7 +4,8 @@ import { collect } from "./test-utils.js";
 
 export function runMultiIndexerIsolationSuite(createIndexer: () => Promise<Indexer>): void {
   describe("Multi-Indexer Isolation", () => {
-    it("two indexers do not share state", async () => {
+    // 30s timeout: PGlite WASM startup x2 alone takes ~12s on average.
+    it("two indexers do not share state", { timeout: 30000 }, async () => {
       const a = await createIndexer();
       const b = await createIndexer();
 
@@ -20,7 +21,7 @@ export function runMultiIndexerIsolationSuite(createIndexer: () => Promise<Index
       await b.close();
     });
 
-    it("closing one indexer does not affect the other", async () => {
+    it("closing one indexer does not affect the other", { timeout: 30000 }, async () => {
       const a = await createIndexer();
       const b = await createIndexer();
 

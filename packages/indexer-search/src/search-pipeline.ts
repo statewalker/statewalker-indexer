@@ -14,6 +14,8 @@ import type {
 } from "./fn-types.js";
 import { type BlendTier, blendWithReranker } from "./reranker-blend.js";
 
+export type PipelineErrorStage = "expansion" | "rerank" | "citations";
+
 export interface PipelineConfig {
   index: Index;
   embedFn?: EmbedFn;
@@ -21,6 +23,16 @@ export interface PipelineConfig {
   reranker?: RerankerFn;
   citationBuilder?: CitationBuilderFn;
   blendTiers?: BlendTier[];
+  /**
+   * Invoked when an optional stage (`expansion`, `rerank`, or `citations`) throws.
+   * When supplied, the pipeline calls this before falling back to the documented
+   * degradation behaviour. When omitted, errors are silently swallowed and the
+   * pipeline still produces results from the surviving stages.
+   *
+   * Callers that want strict failure semantics should re-throw from inside
+   * `onError` — the pipeline itself never re-throws stage errors.
+   */
+  onError?: (stage: PipelineErrorStage, error: unknown) => void;
 }
 
 export interface EntryExplain {
@@ -108,7 +120,7 @@ export class SearchPipeline {
   }
 
   async execute(): Promise<PipelineEntry[]> {
-    const { index, embedFn, blendTiers } = this.config;
+    const { index, embedFn, blendTiers, onError } = this.config;
     const expander = !this._skip.has("expansion") ? this.config.expander : undefined;
     const reranker = !this._skip.has("rerank")
       ? (this._reranker ?? this.config.reranker)
@@ -132,7 +144,8 @@ export class SearchPipeline {
               vecQueries.push(eq.query);
             }
           }
-        } catch {
+        } catch (err) {
+          onError?.("expansion", err);
           lexQueries.push(this._prompt);
           if (embedFn) {
             vecQueries.push(this._prompt);
@@ -212,40 +225,50 @@ export class SearchPipeline {
         blockId: e.blockId,
         text: contentFor(e.blockId),
       }));
-      const rerankResults = await reranker(queryForRerank, candidates);
-      const rerankScores = new Map(rerankResults.map((r) => [r.blockId, r.score]));
-      const blended = blendWithReranker(entries, rerankScores, blendTiers);
-      entries = blended.map((r) => {
-        const existing = entryByBlockId.get(r.blockId);
-        return {
-          blockId: r.blockId,
-          path: existing?.path ?? ("/" as DocumentPath),
-          score: r.score,
-          ...(this._explain && existing?.explain
-            ? {
-                explain: {
-                  ...existing.explain,
-                  rerankScore: rerankScores.get(r.blockId),
-                  blendedScore: r.score,
-                },
-              }
-            : {}),
-        };
-      });
+      try {
+        const rerankResults = await reranker(queryForRerank, candidates);
+        const rerankScores = new Map(rerankResults.map((r) => [r.blockId, r.score]));
+        const blended = blendWithReranker(entries, rerankScores, blendTiers);
+        entries = blended.map((r) => {
+          const existing = entryByBlockId.get(r.blockId);
+          return {
+            blockId: r.blockId,
+            path: existing?.path ?? ("/" as DocumentPath),
+            score: r.score,
+            ...(this._explain && existing?.explain
+              ? {
+                  explain: {
+                    ...existing.explain,
+                    rerankScore: rerankScores.get(r.blockId),
+                    blendedScore: r.score,
+                  },
+                }
+              : {}),
+          };
+        });
+      } catch (err) {
+        onError?.("rerank", err);
+        // Fall back to retrieval ordering — `entries` is unchanged.
+      }
     }
 
     // 5. CITE
     if (citationBuilder && !this._skip.has("citations") && entries.length > 0) {
       const queryForCite = this._prompt ?? lexQueries[0] ?? vecQueries[0] ?? "";
-      const citations = await citationBuilder(queryForCite, entries, async (blockId) =>
-        contentFor(blockId),
-      );
-      const citationMap = new Map(citations.map((c) => [c.blockId, c]));
-      for (const entry of entries) {
-        const cit = citationMap.get(entry.blockId);
-        if (cit) {
-          entry.citation = cit;
+      try {
+        const citations = await citationBuilder(queryForCite, entries, async (blockId) =>
+          contentFor(blockId),
+        );
+        const citationMap = new Map(citations.map((c) => [c.blockId, c]));
+        for (const entry of entries) {
+          const cit = citationMap.get(entry.blockId);
+          if (cit) {
+            entry.citation = cit;
+          }
         }
+      } catch (err) {
+        onError?.("citations", err);
+        // Fall back to entries without citations.
       }
     }
 

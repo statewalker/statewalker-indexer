@@ -120,4 +120,68 @@ describe("chunkMarkdown", () => {
     expect(chunks[0]?.startPos).toBe(0);
     expect(chunks[chunks.length - 1]?.endPos).toBe(text.length);
   });
+
+  describe("fence-boundary semantics", () => {
+    it("never splits a chunk so that it ends on a code-fence boundary line", () => {
+      // Build a doc whose ideal cutoff lands on the opening ``` line.
+      // ``` is at position 50; the targetChars is set so idealEnd == 50.
+      const filler = "x".repeat(50); // chars [0, 49]
+      const fence = "\n```\ncode line\n```\n"; // ``` starts at 50
+      const text = `${filler}${fence}${"y".repeat(100)}`;
+
+      const chunks = chunkMarkdown(text, { targetChars: 50, overlap: 0 });
+
+      // Find any chunk whose content ends with an unmatched ``` (the bug we're guarding against).
+      for (const c of chunks) {
+        const trailing =
+          c.content
+            .split("\n")
+            .filter((l) => l.length > 0)
+            .pop() ?? "";
+        // A chunk that ends with just ``` would mean we split on the closing fence.
+        expect(trailing).not.toBe("```");
+      }
+    });
+
+    it("walks past back-to-back fences without leaving the cutoff inside the next one", () => {
+      // Two fences directly adjacent. A cutoff initially landing in the first
+      // must end up past the second so every chunk has fully matched fences.
+      const prelude = "p".repeat(20);
+      const fenceA = "\n```a\nA\n```";
+      const fenceB = "\n```b\nB\n```";
+      const tail = `\n${"t".repeat(80)}`;
+      const text = `${prelude}${fenceA}${fenceB}${tail}`;
+
+      const chunks = chunkMarkdown(text, { targetChars: 25, overlap: 0 });
+
+      // Invariant: every chunk has an even number of ``` delimiters
+      // (each opening matches a closing within the same chunk).
+      for (const c of chunks) {
+        const fenceCount = (c.content.match(/```/g) ?? []).length;
+        expect(fenceCount % 2).toBe(0);
+      }
+    });
+
+    it("a cutoff landing exactly at the closing-fence position is pushed past it", () => {
+      // ``` opens at 10, closes at the position computed below.
+      const opening = "abc\n```\n";
+      const code = "code body\n";
+      const closing = "```";
+      const post = `\n${"z".repeat(40)}`;
+      const text = `${opening}${code}${closing}${post}`;
+
+      // Pick a targetChars that places idealEnd at the closing ``` line.
+      const targetChars = opening.length + code.length;
+      const chunks = chunkMarkdown(text, { targetChars, overlap: 0 });
+
+      // The chunk that contains the opening fence must also contain the closing fence.
+      const containsOpening = chunks.find((c) => c.content.includes("```\n"));
+      expect(containsOpening).toBeDefined();
+      if (containsOpening) {
+        // Closing ``` is inside the same chunk (verifies the cutoff advanced past it).
+        const fenceCount = (containsOpening.content.match(/```/g) ?? []).length;
+        expect(fenceCount).toBeGreaterThanOrEqual(2);
+      }
+    });
+  });
 });

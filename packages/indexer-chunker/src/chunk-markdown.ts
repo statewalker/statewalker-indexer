@@ -86,11 +86,24 @@ export function chunkMarkdown(text: string, options: ChunkOptions): Chunk[] {
       cutoff = idealEnd;
     }
 
-    // Never split inside a code fence — push cutoff past the fence end
-    for (const fence of fences) {
-      if (cutoff > fence.start && cutoff < fence.end) {
-        cutoff = fence.end;
-        break;
+    // Never split inside or on a code-fence boundary. Use the same inclusive
+    // semantics as isInsideCodeFence — a cutoff equal to fence.start (the
+    // opening ``` line) or fence.end (the start of the closing ``` line) is
+    // "inside" and must be advanced past the closing-fence line. Re-scan
+    // after each advance so back-to-back fences don't leave the cutoff in
+    // the next one.
+    let advanced = true;
+    while (advanced && cutoff < text.length) {
+      advanced = false;
+      for (const fence of fences) {
+        if (cutoff >= fence.start && cutoff <= fence.end) {
+          // Advance past the closing-``` line (including its trailing newline).
+          let next = fence.end;
+          while (next < text.length && text[next] !== "\n") next++;
+          cutoff = next + 1;
+          advanced = true;
+          break;
+        }
       }
     }
 

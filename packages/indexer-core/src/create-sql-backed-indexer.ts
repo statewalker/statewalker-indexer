@@ -14,6 +14,7 @@ import type { SqlFtsDialect } from "./create-sql-fts-retriever.js";
 import { createSqlFtsRetriever } from "./create-sql-fts-retriever.js";
 import type { SqlVectorDialect } from "./create-sql-vector-retriever.js";
 import { createSqlVectorRetriever } from "./create-sql-vector-retriever.js";
+import { createSerialiser } from "./run-exclusive.js";
 import { sanitizePrefix } from "./sanitize-prefix.js";
 import type { SqlDb } from "./sql-db.js";
 import { buildPathPrefixSql } from "./sql-path-prefix.js";
@@ -31,6 +32,15 @@ export interface SqlBackedDialect {
   extraCleanup?(prefix: string): string[];
   /** Suffix appended to the inner UNION subquery in the composite `getSize` SQL. PGlite requires ` AS combined`; DuckDB leaves it empty. */
   unionAliasSuffix: string;
+  /**
+   * When true, `createIndex` wraps its full DDL/DML sequence in `BEGIN; … COMMIT;` and rolls back
+   * on failure. When false/undefined, the sequence runs unwrapped and any failure triggers a
+   * compensating cleanup pass (`dropIndexTables` + manifest `DELETE`).
+   *
+   * PGlite supports transactional DDL; DuckDB's `vss` HNSW DDL does not compose with transactions
+   * and must use the compensating-cleanup path.
+   */
+  supportsDDLInTransaction?: boolean;
 
   fts: SqlFtsDialect;
   vec: SqlVectorDialect;
@@ -49,6 +59,16 @@ interface StoredConfig {
 }
 
 /**
+ * Best-effort runtime-error logger that avoids depending on a global `console`
+ * type declaration. Used to surface failures inside cleanup paths where we
+ * intentionally swallow the cleanup error and re-throw the original.
+ */
+function logError(msg: string, err: unknown): void {
+  const g = globalThis as { console?: { error(...args: unknown[]): void } };
+  g.console?.error(msg, err);
+}
+
+/**
  * Generic SQL-backed `Indexer` factory. Carries the manifest table, index-lifecycle SQL, and
  * composite-assembly shared by every SQL backend; defers all dialect-specific SQL to `opts.dialect`.
  *
@@ -59,6 +79,7 @@ export async function createSqlBackedIndexer(opts: SqlBackedIndexerOptions): Pro
   const indexes = new Map<string, Index>();
   const manifest = new Map<string, IndexInfo>();
   let closed = false;
+  const runExclusive = createSerialiser();
 
   for (const stmt of dialect.extensionInit) await db.exec(stmt);
 
@@ -116,7 +137,123 @@ export async function createSqlBackedIndexer(opts: SqlBackedIndexerOptions): Pro
       onDeleteIndex: async () => {
         await db.exec(`DROP TABLE IF EXISTS ${docsTable}`);
       },
+      onAfterDelete: async () => {
+        const existsClauses: string[] = [];
+        if (fts !== null) {
+          existsClauses.push(
+            `SELECT 1 FROM ${fts.tableName} b WHERE b.doc_id = ${docsTable}.doc_id`,
+          );
+        }
+        if (vec !== null) {
+          existsClauses.push(
+            `SELECT 1 FROM ${vec.tableName} b WHERE b.doc_id = ${docsTable}.doc_id`,
+          );
+        }
+        if (existsClauses.length === 0) return;
+        const orphanCondition = existsClauses.map((c) => `NOT EXISTS (${c})`).join(" AND ");
+        await db.exec(`DELETE FROM ${docsTable} WHERE ${orphanCondition}`);
+      },
     });
+  }
+
+  async function doCreateIndex(params: CreateIndexParams): Promise<Index> {
+    const { name, fulltext, vector, overwrite } = params;
+    if (!fulltext && !vector) {
+      throw new Error("At least one of fulltext or vector must be provided");
+    }
+
+    const overwriting = indexes.has(name) || manifest.has(name);
+    if (overwriting && !overwrite) {
+      throw new Error(`Index "${name}" already exists`);
+    }
+
+    const prefix = sanitizePrefix(name);
+    const transactional = dialect.supportsDDLInTransaction === true;
+
+    // Build retrievers up front so they can participate in the transaction.
+    // They don't touch the DB until `init()` is called below.
+    const docsTable = `idx_${prefix}_docs`;
+    const fts = fulltext
+      ? createSqlFtsRetriever({ db, prefix, docsTable, info: fulltext, dialect: dialect.fts })
+      : null;
+    const vec = vector
+      ? createSqlVectorRetriever({ db, prefix, docsTable, info: vector, dialect: dialect.vec })
+      : null;
+
+    try {
+      if (transactional) await db.exec("BEGIN");
+      if (overwriting) {
+        await dropIndexTables(prefix);
+        await db.query("DELETE FROM __indexer_manifest WHERE name = $1", [name]);
+      }
+      await createDocsTable(prefix);
+      if (fts) await fts.init();
+      if (vec) await vec.init();
+      await db.query("INSERT INTO __indexer_manifest (name, config) VALUES ($1, $2)", [
+        name,
+        JSON.stringify({ fulltext, vector }),
+      ]);
+      if (transactional) await db.exec("COMMIT");
+    } catch (err) {
+      if (transactional) {
+        try {
+          await db.exec("ROLLBACK");
+        } catch (rollbackErr) {
+          logError("createIndex: ROLLBACK failed", rollbackErr);
+        }
+        // Transactional rollback restored the DB to its pre-call state; in-memory
+        // maps were never touched, so DB and memory still agree.
+      } else {
+        // Compensating cleanup: converge on "index absent". Drop any tables that
+        // may have been created, remove any partial manifest row, then drop the
+        // in-memory entry for the overwritten name.
+        try {
+          await dropIndexTables(prefix);
+          await db.query("DELETE FROM __indexer_manifest WHERE name = $1", [name]);
+        } catch (cleanupErr) {
+          logError("createIndex: compensating cleanup failed", cleanupErr);
+        }
+        if (overwriting) {
+          const old = indexes.get(name);
+          if (old) {
+            try {
+              await old.close();
+            } catch (closeErr) {
+              logError("createIndex: closing overwritten index failed", closeErr);
+            }
+          }
+          indexes.delete(name);
+          manifest.delete(name);
+        }
+      }
+      throw err;
+    }
+
+    // SQL committed — now update in-memory state.
+    if (overwriting) {
+      const old = indexes.get(name);
+      if (old) await old.close();
+      indexes.delete(name);
+      manifest.delete(name);
+    }
+    const index = buildIndex(name, docsTable, fts, vec);
+    indexes.set(name, index);
+    manifest.set(name, { name });
+    return index;
+  }
+
+  async function doDeleteIndex(name: string): Promise<void> {
+    const index = indexes.get(name);
+    if (index) {
+      await index.close();
+      indexes.delete(name);
+    }
+    if (manifest.has(name)) {
+      const prefix = sanitizePrefix(name);
+      await dropIndexTables(prefix);
+      await db.query("DELETE FROM __indexer_manifest WHERE name = $1", [name]);
+      manifest.delete(name);
+    }
   }
 
   return {
@@ -125,49 +262,11 @@ export async function createSqlBackedIndexer(opts: SqlBackedIndexerOptions): Pro
       return [...manifest.values()];
     },
 
-    async createIndex(params: CreateIndexParams): Promise<Index> {
-      ensureOpen();
-      const { name, fulltext, vector, overwrite } = params;
-      if (!fulltext && !vector) {
-        throw new Error("At least one of fulltext or vector must be provided");
-      }
-
-      if (indexes.has(name) || manifest.has(name)) {
-        if (overwrite) {
-          const old = indexes.get(name);
-          if (old) await old.close();
-          indexes.delete(name);
-          manifest.delete(name);
-          const prefix = sanitizePrefix(name);
-          await dropIndexTables(prefix);
-          await db.query("DELETE FROM __indexer_manifest WHERE name = $1", [name]);
-        } else {
-          throw new Error(`Index "${name}" already exists`);
-        }
-      }
-
-      const prefix = sanitizePrefix(name);
-      const docsTable = await createDocsTable(prefix);
-
-      const fts = fulltext
-        ? createSqlFtsRetriever({ db, prefix, docsTable, info: fulltext, dialect: dialect.fts })
-        : null;
-      const vec = vector
-        ? createSqlVectorRetriever({ db, prefix, docsTable, info: vector, dialect: dialect.vec })
-        : null;
-
-      if (fts) await fts.init();
-      if (vec) await vec.init();
-
-      await db.query("INSERT INTO __indexer_manifest (name, config) VALUES ($1, $2)", [
-        name,
-        JSON.stringify({ fulltext, vector }),
-      ]);
-
-      const index = buildIndex(name, docsTable, fts, vec);
-      indexes.set(name, index);
-      manifest.set(name, { name });
-      return index;
+    createIndex(params: CreateIndexParams): Promise<Index> {
+      return runExclusive(async () => {
+        ensureOpen();
+        return doCreateIndex(params);
+      });
     },
 
     async getIndex(name: string): Promise<Index | null> {
@@ -205,6 +304,12 @@ export async function createSqlBackedIndexer(opts: SqlBackedIndexerOptions): Pro
           })
         : null;
 
+      // The retriever init() methods are CREATE TABLE IF NOT EXISTS …, so calling them
+      // here is a no-op when tables exist and a recovery step when they were dropped
+      // out-of-band between manifest read and this getIndex call.
+      if (fts) await fts.init();
+      if (vec) await vec.init();
+
       const index = buildIndex(name, docsTable, fts, vec);
       indexes.set(name, index);
       return index;
@@ -215,19 +320,11 @@ export async function createSqlBackedIndexer(opts: SqlBackedIndexerOptions): Pro
       return manifest.has(name);
     },
 
-    async deleteIndex(name: string): Promise<void> {
-      ensureOpen();
-      const index = indexes.get(name);
-      if (index) {
-        await index.close();
-        indexes.delete(name);
-      }
-      if (manifest.has(name)) {
-        const prefix = sanitizePrefix(name);
-        await dropIndexTables(prefix);
-        await db.query("DELETE FROM __indexer_manifest WHERE name = $1", [name]);
-        manifest.delete(name);
-      }
+    deleteIndex(name: string): Promise<void> {
+      return runExclusive(async () => {
+        ensureOpen();
+        await doDeleteIndex(name);
+      });
     },
 
     async flush(): Promise<void> {

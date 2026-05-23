@@ -23,6 +23,8 @@ export interface CompositeIndexOptions {
   getSize?: (pathPrefix?: DocumentPath) => Promise<number>;
   /** Engine-specific cleanup invoked by `deleteIndex()` AFTER sub-indexes are deleted. SQL backends pass a closure here to `DROP TABLE` the shared docs table. */
   onDeleteIndex?: () => Promise<void>;
+  /** Engine-specific hook invoked by `deleteDocuments()` AFTER both sub-indexes finish. SQL backends pass a closure here to reclaim rows in the shared docs table whose `doc_id` no longer appears in any sub-index. */
+  onAfterDelete?: () => Promise<void>;
 }
 
 /**
@@ -30,7 +32,7 @@ export interface CompositeIndexOptions {
  * via RRF or weighted linear blend. Replaces `MemIndex` / `DuckDbIndex` / `PGLiteIndex`.
  */
 export function createCompositeIndex(opts: CompositeIndexOptions): Index {
-  const { name, fts, vec, metadata, onDeleteIndex } = opts;
+  const { name, fts, vec, metadata, onDeleteIndex, onAfterDelete } = opts;
   let closed = false;
 
   const ensureOpen = (): void => {
@@ -154,6 +156,7 @@ export function createCompositeIndex(opts: CompositeIndexOptions): Index {
       }
       if (fts !== null) await fts.deleteDocuments(selectors);
       if (vec !== null) await vec.deleteDocuments(selectors);
+      if (onAfterDelete) await onAfterDelete();
     },
 
     async getSize(pathPrefix?: DocumentPath): Promise<number> {
