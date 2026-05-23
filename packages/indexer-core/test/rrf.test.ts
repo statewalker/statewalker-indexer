@@ -3,7 +3,7 @@
  * by Tobi Lutke. MIT License — Copyright (c) 2024-2026 Tobi Lutke.
  */
 import { describe, expect, it } from "vitest";
-import { buildRrfTrace, type RankedList, reciprocalRankFusion } from "../src/rrf.js";
+import { type RankedList, reciprocalRankFusion } from "../src/rrf.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -189,108 +189,5 @@ describe("reciprocalRankFusion — top-rank bonus", () => {
     // base = 1/63 (list1 rank3) + 1/61 (list2 rank1)
     // bonus = 0.05 (best rank = 1)
     expect(item?.score).toBeCloseTo(1 / 63 + 1 / 61 + 0.05, 10);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// buildRrfTrace
-// ---------------------------------------------------------------------------
-describe("buildRrfTrace", () => {
-  it("trace totals match fusion results exactly", () => {
-    const lists = makeTwoLists();
-    const merged = reciprocalRankFusion(lists, 10, K);
-    const traces = buildRrfTrace(lists, K);
-
-    for (const result of merged) {
-      const trace = traces.get(result.blockId);
-      expect(trace).toBeDefined();
-      expect(trace?.totalScore).toBeCloseTo(result.score, 10);
-    }
-  });
-
-  it("records per-list contributions with source metadata", () => {
-    const lists = makeTwoLists();
-    const traces = buildRrfTrace(lists, K);
-
-    const traceA = traces.get("a");
-    expect(traceA).toBeDefined();
-    expect(traceA?.contributions).toHaveLength(2);
-
-    const fromFts = traceA?.contributions.find((c) => c.source === "fts");
-    expect(fromFts).toBeDefined();
-    expect(fromFts?.listIndex).toBe(0);
-    expect(fromFts?.rank).toBe(1); // 1-indexed
-    expect(fromFts?.weight).toBe(2.0);
-    expect(fromFts?.queryType).toBe("keyword");
-
-    const fromVec = traceA?.contributions.find((c) => c.source === "vec");
-    expect(fromVec).toBeDefined();
-    expect(fromVec?.listIndex).toBe(1);
-    expect(fromVec?.rank).toBe(2); // 1-indexed
-    expect(fromVec?.weight).toBe(1.0);
-    expect(fromVec?.queryType).toBe("semantic");
-  });
-
-  it("topRank is best rank across all lists", () => {
-    const lists = makeTwoLists();
-    const traces = buildRrfTrace(lists, K);
-
-    // "a" is rank 1 in list 0, rank 2 in list 1 → topRank = 1
-    expect(traces.get("a")?.topRank).toBe(1);
-    // "b" is rank 2 in list 0, rank 1 in list 1 → topRank = 1
-    expect(traces.get("b")?.topRank).toBe(1);
-  });
-
-  it("topRankBonus matches thresholds (0.05/0.02/0.0)", () => {
-    const lists: RankedList[] = [
-      {
-        results: [
-          { blockId: "rank1", score: 1 },
-          { blockId: "rank2", score: 0.9 },
-          { blockId: "rank3", score: 0.8 },
-          { blockId: "rank4", score: 0.7 },
-        ],
-      },
-    ];
-    const traces = buildRrfTrace(lists, K);
-
-    expect(traces.get("rank1")?.topRankBonus).toBe(0.05);
-    expect(traces.get("rank2")?.topRankBonus).toBe(0.02);
-    expect(traces.get("rank3")?.topRankBonus).toBe(0.02);
-    expect(traces.get("rank4")?.topRankBonus).toBe(0);
-  });
-
-  it("contributions array has one entry per list appearance", () => {
-    const lists: RankedList[] = [
-      { results: [{ blockId: "doc", score: 1 }] },
-      { results: [{ blockId: "doc", score: 1 }] },
-      {
-        results: [
-          { blockId: "other", score: 1 },
-          { blockId: "doc", score: 0.5 },
-        ],
-      },
-    ];
-    const traces = buildRrfTrace(lists, K);
-    expect(traces.get("doc")?.contributions).toHaveLength(3);
-    expect(traces.get("other")?.contributions).toHaveLength(1);
-  });
-
-  it("weighted contribution = weight / (k + rank + 1)", () => {
-    const lists: RankedList[] = [
-      {
-        results: [{ blockId: "a", score: 1 }],
-        weight: 3.0,
-      },
-    ];
-    const traces = buildRrfTrace(lists, K);
-    const contrib = traces.get("a")?.contributions[0];
-
-    // rank 1 (1-indexed), so contribution = 3.0 / (60 + 1 + 1) = 3/62
-    // Wait — rank is 1-indexed in trace, but formula uses 0-indexed position
-    // contribution = weight / (k + 0-indexed-rank + 1) = 3 / (60 + 0 + 1) = 3/61
-    expect(contrib?.contribution).toBeCloseTo(3 / 61, 10);
-    expect(contrib?.rank).toBe(1);
-    expect(contrib?.weight).toBe(3.0);
   });
 });

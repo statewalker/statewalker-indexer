@@ -11,8 +11,7 @@ import type {
 export function wrapDbAsSqlDb(db: Db): SqlDb {
   return {
     exec: (sql) => db.exec(sql),
-    query: <T>(sql: string, params?: unknown[]) =>
-      db.query<T>(sql, params ?? []),
+    query: <T>(sql: string, params?: unknown[]) => db.query<T>(sql, params ?? []),
   };
 }
 

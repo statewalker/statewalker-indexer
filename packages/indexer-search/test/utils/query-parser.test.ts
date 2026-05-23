@@ -7,7 +7,7 @@ import {
   parseStructuredQuery,
   validateLexQuery,
   validateSemanticQuery,
-} from "../src/query-parser.js";
+} from "../../src/utils/query-parser.js";
 
 describe("parseStructuredQuery", () => {
   describe("plain queries — returns null", () => {

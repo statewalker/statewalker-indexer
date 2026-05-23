@@ -1,5 +1,5 @@
 import type { BlockId, ScoredItem } from "@statewalker/indexer-api";
-import type { QueryType } from "./query-parser.js";
+import type { QueryType } from "./utils/query-parser.js";
 
 export interface ExpandedQuery {
   type: QueryType;
