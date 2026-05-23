@@ -197,18 +197,21 @@ export class MemVectorIndex implements EmbeddingIndex {
     const paths: string[] = [];
     const blockIds: string[] = [];
     const embeddingArrays: number[][] = [];
+    const metadata: Array<string | null> = [];
     for (const entry of this.entries.values()) {
       paths.push(entry.path);
       blockIds.push(entry.blockId);
       embeddingArrays.push(Array.from(entry.embedding));
+      metadata.push(entry.metadata === undefined ? null : JSON.stringify(entry.metadata));
     }
     const table = tableFromArrays(
-      { path: paths, blockId: blockIds, embedding: embeddingArrays },
+      { path: paths, blockId: blockIds, embedding: embeddingArrays, metadata },
       {
         types: {
           path: utf8(),
           blockId: utf8(),
           embedding: fixedSizeList(float32(), dim),
+          metadata: utf8(),
         },
       },
     );
@@ -222,12 +225,16 @@ export class MemVectorIndex implements EmbeddingIndex {
     const pathCol = table.getChild("path");
     const blockIdCol = table.getChild("blockId");
     const embCol = table.getChild("embedding");
+    const metaCol = table.getChild("metadata");
     for (let i = 0; i < table.numRows; i++) {
       const path = pathCol.at(i) as string as DocumentPath;
       const blockId = blockIdCol.at(i) as string;
       const embedding = new Float32Array(embCol.at(i) as ArrayLike<number>);
+      const metaRaw = metaCol?.at(i) as string | null | undefined;
+      const metadata =
+        metaRaw == null ? undefined : (JSON.parse(metaRaw) as StoredEntry["metadata"]);
       const key = compositeKey(path, blockId);
-      vec.entries.set(key, { path, blockId, embedding });
+      vec.entries.set(key, { path, blockId, embedding, metadata });
     }
     return vec;
   }

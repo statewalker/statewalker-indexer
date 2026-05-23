@@ -16,6 +16,7 @@ import type { SqlVectorDialect } from "./create-sql-vector-retriever.js";
 import { createSqlVectorRetriever } from "./create-sql-vector-retriever.js";
 import { sanitizePrefix } from "./sanitize-prefix.js";
 import type { SqlDb } from "./sql-db.js";
+import { buildPathPrefixSql } from "./sql-path-prefix.js";
 
 type FtsWithTable = FullTextIndex & { readonly tableName: string; init(): Promise<void> };
 type VecWithTable = EmbeddingIndex & { readonly tableName: string; init(): Promise<void> };
@@ -100,8 +101,10 @@ export async function createSqlBackedIndexer(opts: SqlBackedIndexerOptions): Pro
       vec,
       getSize: async (pathPrefix?: DocumentPath): Promise<number> => {
         if (fts !== null && vec !== null) {
-          const pathClause = pathPrefix !== undefined ? ` WHERE d.path LIKE $1 || '%'` : "";
-          const params = pathPrefix !== undefined ? [pathPrefix] : [];
+          const cond =
+            pathPrefix !== undefined ? buildPathPrefixSql("d.path", pathPrefix, 1) : null;
+          const pathClause = cond ? ` WHERE ${cond.sql}` : "";
+          const params = cond?.params ?? [];
           const sql = `SELECT COUNT(*) AS cnt FROM (SELECT b.doc_id, b.block_id FROM ${fts.tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id${pathClause} UNION SELECT b.doc_id, b.block_id FROM ${vec.tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id${pathClause})${dialect.unionAliasSuffix}`;
           const rows = await db.query<{ cnt: number | bigint }>(sql, params);
           return Number(rows[0]?.cnt ?? 0);

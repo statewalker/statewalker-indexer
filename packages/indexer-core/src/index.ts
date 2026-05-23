@@ -29,4 +29,10 @@ export { readEntryBytes, singleChunk, toBytes } from "./persistence-bytes.js";
 export { type RankedList, reciprocalRankFusion } from "./rrf.js";
 export { sanitizePrefix } from "./sanitize-prefix.js";
 export type { SqlDb } from "./sql-db.js";
+export {
+  buildPathPrefixesSql,
+  buildPathPrefixSql,
+  escapeLikePattern,
+  type PathPrefixSql,
+} from "./sql-path-prefix.js";
 export { validateDimensionality } from "./validate-dimensionality.js";

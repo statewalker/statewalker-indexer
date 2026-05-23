@@ -274,23 +274,26 @@ export class MiniSearchFullTextIndex implements FullTextIndex {
       keys: string[];
     };
 
-    const index = new MiniSearchFullTextIndex(info);
+    if (parsed.version !== 3) {
+      throw new Error(
+        `MiniSearchFullTextIndex: unsupported serialised version ${String(parsed.version)} (expected 3)`,
+      );
+    }
 
-    if (parsed.version === 3) {
-      index.miniSearch = MiniSearch.loadJSON(JSON.stringify(parsed.miniSearch), {
-        fields: ["content"],
-        idField: "key",
+    const index = new MiniSearchFullTextIndex(info);
+    index.miniSearch = MiniSearch.loadJSON(JSON.stringify(parsed.miniSearch), {
+      fields: ["content"],
+      idField: "key",
+    });
+    index.keySet = new Set(parsed.keys);
+    for (const block of parsed.blocks) {
+      const key = compositeKey(block.path as DocumentPath, block.blockId);
+      index.blocks.set(key, {
+        path: block.path as DocumentPath,
+        blockId: block.blockId,
+        content: block.content,
+        metadata: block.metadata,
       });
-      index.keySet = new Set(parsed.keys);
-      for (const block of parsed.blocks) {
-        const key = compositeKey(block.path as DocumentPath, block.blockId);
-        index.blocks.set(key, {
-          path: block.path as DocumentPath,
-          blockId: block.blockId,
-          content: block.content,
-          metadata: block.metadata,
-        });
-      }
     }
 
     return index;

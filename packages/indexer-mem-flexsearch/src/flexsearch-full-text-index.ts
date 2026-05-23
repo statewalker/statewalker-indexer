@@ -308,26 +308,29 @@ export class FlexSearchFullTextIndex implements FullTextIndex {
       nextNum: number;
     };
 
-    const fts = new FlexSearchFullTextIndex(info);
+    if (parsed.version !== 3) {
+      throw new Error(
+        `FlexSearchFullTextIndex: unsupported serialised version ${String(parsed.version)} (expected 3)`,
+      );
+    }
 
-    if (parsed.version === 3) {
-      for (const [key, data] of Object.entries(parsed.chunks)) {
-        fts.flexIndex.import(key, data);
-      }
-      for (const [key, num] of parsed.keyToNum) {
-        fts.keyToNum.set(key, num);
-        fts.numToKey.set(num, key);
-      }
-      fts.nextNum = parsed.nextNum;
-      for (const block of parsed.blocks) {
-        const key = compositeKey(block.path as DocumentPath, block.blockId);
-        fts.blocks.set(key, {
-          path: block.path as DocumentPath,
-          blockId: block.blockId,
-          content: block.content,
-          metadata: block.metadata,
-        });
-      }
+    const fts = new FlexSearchFullTextIndex(info);
+    for (const [key, data] of Object.entries(parsed.chunks)) {
+      fts.flexIndex.import(key, data);
+    }
+    for (const [key, num] of parsed.keyToNum) {
+      fts.keyToNum.set(key, num);
+      fts.numToKey.set(num, key);
+    }
+    fts.nextNum = parsed.nextNum;
+    for (const block of parsed.blocks) {
+      const key = compositeKey(block.path as DocumentPath, block.blockId);
+      fts.blocks.set(key, {
+        path: block.path as DocumentPath,
+        blockId: block.blockId,
+        content: block.content,
+        metadata: block.metadata,
+      });
     }
 
     return fts;

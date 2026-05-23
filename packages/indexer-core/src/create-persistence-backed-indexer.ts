@@ -73,7 +73,6 @@ export function createPersistenceBackedIndexer<F extends FullTextIndex, V extend
 
   async function loadFromPersistence(): Promise<void> {
     if (!persistence || initialized) return;
-    initialized = true;
 
     const textEntries = new Map<string, string>();
     const binaryEntries = new Map<string, Uint8Array>();
@@ -82,6 +81,7 @@ export function createPersistenceBackedIndexer<F extends FullTextIndex, V extend
       binaryEntries.set(entry.name, bytes);
       textEntries.set(entry.name, new TextDecoder().decode(bytes));
     }
+    initialized = true;
 
     const manifestJson = textEntries.get("__manifest__");
     if (!manifestJson) return;
@@ -164,7 +164,14 @@ export function createPersistenceBackedIndexer<F extends FullTextIndex, V extend
 
   async function ensureInitialized(): Promise<void> {
     if (initialized) return;
-    if (!initPromise) initPromise = loadFromPersistence();
+    if (!initPromise) {
+      initPromise = loadFromPersistence().catch((err) => {
+        // Allow the next caller to retry rather than treating a transient
+        // load failure as permanent initialised-state.
+        initPromise = null;
+        throw err;
+      });
+    }
     await initPromise;
   }
 

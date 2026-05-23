@@ -6,6 +6,7 @@ import type {
   SqlFtsDialect,
   SqlVectorDialect,
 } from "@statewalker/indexer-core";
+import { buildPathPrefixesSql } from "@statewalker/indexer-core";
 
 /** Adapt `@statewalker/db-api`'s `Db` to `@statewalker/indexer-core`'s minimal `SqlDb`. */
 export function wrapDbAsSqlDb(db: Db): SqlDb {
@@ -91,9 +92,9 @@ export const duckdbFtsDialect: SqlFtsDialect = {
 
     let pathClause = "";
     if (paths && paths.length > 0) {
-      const pathOffset = allParams.length + 1;
-      pathClause = ` AND (${paths.map((_, i) => `d.path LIKE $${pathOffset + i} || '%'`).join(" OR ")})`;
-      allParams.push(...(paths as string[]));
+      const cond = buildPathPrefixesSql("d.path", paths as string[], allParams.length + 1);
+      pathClause = ` AND ${cond.sql}`;
+      allParams.push(...cond.params);
     }
 
     const topKParam = `$${allParams.length + 1}`;
@@ -156,9 +157,9 @@ export const duckdbVectorDialect: SqlVectorDialect = {
     const allParams: unknown[] = [vecLiteral];
     let pathClause = "";
     if (paths && paths.length > 0) {
-      const pathOffset = allParams.length + 1;
-      pathClause = `WHERE ${paths.map((_, i) => `d.path LIKE $${pathOffset + i} || '%'`).join(" OR ")} `;
-      allParams.push(...(paths as string[]));
+      const cond = buildPathPrefixesSql("d.path", paths as string[], allParams.length + 1);
+      pathClause = `WHERE ${cond.sql} `;
+      allParams.push(...cond.params);
     }
 
     const topKParam = `$${allParams.length + 1}`;

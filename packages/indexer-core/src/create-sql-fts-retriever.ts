@@ -12,6 +12,7 @@ import type {
 import { toAsyncIterable } from "./async.js";
 import { compositeKey } from "./composite-key.js";
 import type { SqlDb } from "./sql-db.js";
+import { buildPathPrefixSql } from "./sql-path-prefix.js";
 
 /**
  * Per-dialect SQL hooks for a full-text sub-index.
@@ -139,12 +140,10 @@ export function createSqlFtsRetriever(opts: SqlFtsRetrieverOptions): FullTextInd
       for (const block of blocks) {
         const docId = await resolveDocId(block.path);
         const metaJson = block.metadata ? JSON.stringify(block.metadata) : null;
-        await db.query(`DELETE FROM ${tableName} WHERE doc_id = $1 AND block_id = $2`, [
-          docId,
-          block.blockId,
-        ]);
+        // Single-statement UPSERT: a failed re-ingest can't strand the old row
+        // the way a DELETE+INSERT pair would when the INSERT half throws.
         await db.query(
-          `INSERT INTO ${tableName} (doc_id, block_id, content, metadata) VALUES ($1, $2, $3, $4)`,
+          `INSERT INTO ${tableName} (doc_id, block_id, content, metadata) VALUES ($1, $2, $3, $4) ON CONFLICT (doc_id, block_id) DO UPDATE SET content = EXCLUDED.content, metadata = EXCLUDED.metadata`,
           [docId, block.blockId, block.content, metaJson],
         );
       }
@@ -169,9 +168,10 @@ export function createSqlFtsRetriever(opts: SqlFtsRetrieverOptions): FullTextInd
             [sel.path, sel.blockId],
           );
         } else {
+          const cond = buildPathPrefixSql("path", sel.path, 1);
           await db.query(
-            `DELETE FROM ${tableName} WHERE doc_id IN (SELECT doc_id FROM ${docsTable} WHERE path LIKE $1 || '%')`,
-            [sel.path],
+            `DELETE FROM ${tableName} WHERE doc_id IN (SELECT doc_id FROM ${docsTable} WHERE ${cond.sql})`,
+            cond.params,
           );
         }
       }
@@ -181,9 +181,10 @@ export function createSqlFtsRetriever(opts: SqlFtsRetrieverOptions): FullTextInd
     async getSize(pathPrefix?: DocumentPath): Promise<number> {
       ensureOpen();
       if (pathPrefix !== undefined) {
+        const cond = buildPathPrefixSql("d.path", pathPrefix, 1);
         const rows = await db.query<{ cnt: number | bigint }>(
-          `SELECT COUNT(*) AS cnt FROM ${tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id WHERE d.path LIKE $1 || '%'`,
-          [pathPrefix],
+          `SELECT COUNT(*) AS cnt FROM ${tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id WHERE ${cond.sql}`,
+          cond.params,
         );
         return Number(rows[0]?.cnt ?? 0);
       }
@@ -195,23 +196,21 @@ export function createSqlFtsRetriever(opts: SqlFtsRetrieverOptions): FullTextInd
 
     async *getDocumentPaths(pathPrefix?: DocumentPath): AsyncGenerator<DocumentPath> {
       ensureOpen();
-      const sql =
-        pathPrefix !== undefined
-          ? `SELECT DISTINCT d.path FROM ${tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id WHERE d.path LIKE $1 || '%'`
-          : `SELECT DISTINCT d.path FROM ${tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id`;
-      const params = pathPrefix !== undefined ? [pathPrefix] : [];
-      const rows = await db.query<{ path: string }>(sql, params);
+      const cond = pathPrefix !== undefined ? buildPathPrefixSql("d.path", pathPrefix, 1) : null;
+      const sql = cond
+        ? `SELECT DISTINCT d.path FROM ${tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id WHERE ${cond.sql}`
+        : `SELECT DISTINCT d.path FROM ${tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id`;
+      const rows = await db.query<{ path: string }>(sql, cond?.params ?? []);
       for (const row of rows) yield row.path as DocumentPath;
     },
 
     async *getDocumentBlocksRefs(pathPrefix?: DocumentPath): AsyncGenerator<BlockReference> {
       ensureOpen();
-      const sql =
-        pathPrefix !== undefined
-          ? `SELECT d.path, b.block_id FROM ${tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id WHERE d.path LIKE $1 || '%'`
-          : `SELECT d.path, b.block_id FROM ${tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id`;
-      const params = pathPrefix !== undefined ? [pathPrefix] : [];
-      const rows = await db.query<{ path: string; block_id: string }>(sql, params);
+      const cond = pathPrefix !== undefined ? buildPathPrefixSql("d.path", pathPrefix, 1) : null;
+      const sql = cond
+        ? `SELECT d.path, b.block_id FROM ${tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id WHERE ${cond.sql}`
+        : `SELECT d.path, b.block_id FROM ${tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id`;
+      const rows = await db.query<{ path: string; block_id: string }>(sql, cond?.params ?? []);
       for (const row of rows) {
         yield { path: row.path as DocumentPath, blockId: row.block_id };
       }
@@ -219,11 +218,11 @@ export function createSqlFtsRetriever(opts: SqlFtsRetrieverOptions): FullTextInd
 
     async *getDocumentsBlocks(pathPrefix?: DocumentPath): AsyncGenerator<FullTextBlock> {
       ensureOpen();
-      const sql =
-        pathPrefix !== undefined
-          ? `SELECT d.path, b.block_id, b.content, b.metadata FROM ${tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id WHERE d.path LIKE $1 || '%'`
-          : `SELECT d.path, b.block_id, b.content, b.metadata FROM ${tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id`;
-      const params = pathPrefix !== undefined ? [pathPrefix] : [];
+      const cond = pathPrefix !== undefined ? buildPathPrefixSql("d.path", pathPrefix, 1) : null;
+      const sql = cond
+        ? `SELECT d.path, b.block_id, b.content, b.metadata FROM ${tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id WHERE ${cond.sql}`
+        : `SELECT d.path, b.block_id, b.content, b.metadata FROM ${tableName} b JOIN ${docsTable} d ON d.doc_id = b.doc_id`;
+      const params = cond?.params ?? [];
       const rows = await db.query<{
         path: string;
         block_id: string;
