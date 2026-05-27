@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "@statewalker/indexer-api": "workspace:*",
+    "@statewalker/indexer-core": "workspace:*",
     "@electric-sql/pglite": "catalog:"
   },
   "devDependencies": {

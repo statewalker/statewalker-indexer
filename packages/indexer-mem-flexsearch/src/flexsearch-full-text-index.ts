@@ -9,6 +9,7 @@ import type {
   Metadata,
   PathSelector,
 } from "@statewalker/indexer-api";
+import { compositeKey, matchesPrefix, toAsyncIterable } from "@statewalker/indexer-core";
 import FlexSearch from "flexsearch";
 
 interface StoredBlock {
@@ -16,14 +17,6 @@ interface StoredBlock {
   blockId: string;
   content: string;
   metadata?: Metadata;
-}
-
-function compositeKey(path: DocumentPath, blockId: string): string {
-  return `${path}\0${blockId}`;
-}
-
-function matchesPrefix(path: DocumentPath, prefix: DocumentPath): boolean {
-  return path.startsWith(prefix);
 }
 
 export class FlexSearchFullTextIndex implements FullTextIndex {
@@ -34,6 +27,15 @@ export class FlexSearchFullTextIndex implements FullTextIndex {
   private blocks = new Map<string, StoredBlock>();
   private nextNum = 1;
   private closed = false;
+  /**
+   * Dirty bit. `true` whenever the FTS index has been mutated since the
+   * last `serialize()`. The serializer caches the last produced JSON and
+   * returns it directly when `!dirty`, so a no-op re-sync skips the
+   * expensive FlexSearch export entirely. Starts `true` so the first
+   * serialize after construction always runs.
+   */
+  private dirty = true;
+  private cachedSerialized?: string;
 
   constructor(info: FullTextIndexInfo) {
     this.info = info;
@@ -42,6 +44,15 @@ export class FlexSearchFullTextIndex implements FullTextIndex {
       resolution: 9,
       cache: true,
     });
+  }
+
+  /**
+   * `true` when the in-memory state has changed since the last serialize.
+   * Callers (e.g. the persistence layer) may use it to skip serialization
+   * and writes when the index has not been touched.
+   */
+  isDirty(): boolean {
+    return this.dirty;
   }
 
   private ensureOpen(): void {
@@ -150,6 +161,7 @@ export class FlexSearchFullTextIndex implements FullTextIndex {
 
   async addDocument(blocks: FullTextBlock[]): Promise<void> {
     this.ensureOpen();
+    if (blocks.length === 0) return;
     for (const block of blocks) {
       const key = compositeKey(block.path, block.blockId);
       const num = this.getOrAssignNum(key);
@@ -165,6 +177,7 @@ export class FlexSearchFullTextIndex implements FullTextIndex {
         metadata: block.metadata,
       });
     }
+    this.dirty = true;
   }
 
   async addDocuments(
@@ -180,10 +193,11 @@ export class FlexSearchFullTextIndex implements FullTextIndex {
     pathSelectors: PathSelector[] | AsyncIterable<PathSelector>,
   ): Promise<void> {
     this.ensureOpen();
-    for await (const sel of pathSelectors as AsyncIterable<PathSelector>) {
+    let removed = 0;
+    for await (const sel of toAsyncIterable(pathSelectors)) {
       if (sel.blockId !== undefined) {
         const key = compositeKey(sel.path, sel.blockId);
-        this.removeByKey(key);
+        if (this.removeByKey(key)) removed += 1;
       } else {
         const keysToDelete: string[] = [];
         for (const [key, block] of this.blocks) {
@@ -192,20 +206,24 @@ export class FlexSearchFullTextIndex implements FullTextIndex {
           }
         }
         for (const key of keysToDelete) {
-          this.removeByKey(key);
+          if (this.removeByKey(key)) removed += 1;
         }
       }
     }
+    if (removed > 0) this.dirty = true;
   }
 
-  private removeByKey(key: string): void {
+  /** Returns true when the key was present and got removed. */
+  private removeByKey(key: string): boolean {
     const num = this.keyToNum.get(key);
+    const had = this.blocks.has(key);
     if (num !== undefined) {
       this.flexIndex.remove(num);
       this.keyToNum.delete(key);
       this.numToKey.delete(num);
     }
     this.blocks.delete(key);
+    return had;
   }
 
   async getSize(pathPrefix?: DocumentPath): Promise<number> {
@@ -266,11 +284,23 @@ export class FlexSearchFullTextIndex implements FullTextIndex {
     this.blocks.clear();
     this.keyToNum.clear();
     this.numToKey.clear();
+    this.cachedSerialized = undefined;
+    this.dirty = true;
     this.closed = true;
   }
 
-  /** Serialize to JSON string (v3 format with path data) */
+  /**
+   * Serialize to JSON string (v3 format with path data).
+   *
+   * Caches the result; while `dirty` is false (no mutations since the
+   * last call) returns the same string, skipping the FlexSearch export
+   * entirely. The persistence layer still calls into us each flush, but
+   * the heavy work only runs when the index actually changed.
+   */
   async serialize(): Promise<string> {
+    if (!this.dirty && this.cachedSerialized !== undefined) {
+      return this.cachedSerialized;
+    }
     const chunks = new Map<string, string>();
     await this.flexIndex.export((key: string | number, data: string) => {
       chunks.set(String(key), data);
@@ -291,13 +321,16 @@ export class FlexSearchFullTextIndex implements FullTextIndex {
       });
     }
 
-    return JSON.stringify({
+    const out = JSON.stringify({
       version: 3,
       chunks: Object.fromEntries(chunks),
       blocks: blocksData,
       keyToNum: [...this.keyToNum.entries()],
       nextNum: this.nextNum,
     });
+    this.cachedSerialized = out;
+    this.dirty = false;
+    return out;
   }
 
   /** Deserialize from JSON — handles v3 format */
@@ -315,28 +348,34 @@ export class FlexSearchFullTextIndex implements FullTextIndex {
       nextNum: number;
     };
 
-    const fts = new FlexSearchFullTextIndex(info);
-
-    if (parsed.version === 3) {
-      for (const [key, data] of Object.entries(parsed.chunks)) {
-        fts.flexIndex.import(key, data);
-      }
-      for (const [key, num] of parsed.keyToNum) {
-        fts.keyToNum.set(key, num);
-        fts.numToKey.set(num, key);
-      }
-      fts.nextNum = parsed.nextNum;
-      for (const block of parsed.blocks) {
-        const key = compositeKey(block.path as DocumentPath, block.blockId);
-        fts.blocks.set(key, {
-          path: block.path as DocumentPath,
-          blockId: block.blockId,
-          content: block.content,
-          metadata: block.metadata,
-        });
-      }
+    if (parsed.version !== 3) {
+      throw new Error(
+        `FlexSearchFullTextIndex: unsupported serialised version ${String(parsed.version)} (expected 3)`,
+      );
     }
 
+    const fts = new FlexSearchFullTextIndex(info);
+    for (const [key, data] of Object.entries(parsed.chunks)) {
+      fts.flexIndex.import(key, data);
+    }
+    for (const [key, num] of parsed.keyToNum) {
+      fts.keyToNum.set(key, num);
+      fts.numToKey.set(num, key);
+    }
+    fts.nextNum = parsed.nextNum;
+    for (const block of parsed.blocks) {
+      const key = compositeKey(block.path as DocumentPath, block.blockId);
+      fts.blocks.set(key, {
+        path: block.path as DocumentPath,
+        blockId: block.blockId,
+        content: block.content,
+        metadata: block.metadata,
+      });
+    }
+    // Prime the cache: a deserialized index that's never mutated should
+    // return the same JSON it was loaded from when re-serialized.
+    fts.cachedSerialized = json;
+    fts.dirty = false;
     return fts;
   }
 }

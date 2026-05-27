@@ -85,6 +85,43 @@ export function runFullTextIndexSuite(getIndexer: () => Indexer): void {
       expect(await fts.getSize()).toBe(2);
     });
 
+    it("multi-term query ranks fully-matched block above single-term matches", async () => {
+      const indexer = getIndexer();
+      const index = await indexer.createIndex({
+        name: "test",
+        fulltext: { language: "en" },
+      });
+      const fts = defined(index.getFullTextIndex());
+      await fts.addDocument([
+        { path: "/docs/a", blockId: "alpha-only", content: "alpha content about nothing else" },
+        { path: "/docs/b", blockId: "beta-only", content: "beta content about nothing else" },
+        { path: "/docs/c", blockId: "alpha-beta", content: "alpha beta content together" },
+      ]);
+
+      const results = await collect(fts.search({ queries: ["alpha beta"], topK: 10 }));
+      expect(results.length).toBeGreaterThan(0);
+      // The block containing both terms should rank above either single-term block.
+      expect(results[0]?.blockId).toBe("alpha-beta");
+    });
+
+    it("flush + subsequent search preserves content", async () => {
+      const indexer = getIndexer();
+      const index = await indexer.createIndex({
+        name: "test",
+        fulltext: { language: "en" },
+      });
+      const fts = defined(index.getFullTextIndex());
+      await fts.addDocument([
+        { path: "/docs/1", blockId: "1", content: "hello world" },
+        { path: "/docs/2", blockId: "2", content: "goodbye world" },
+      ]);
+      await fts.flush();
+
+      const results = await collect(fts.search({ queries: ["hello"], topK: 10 }));
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]?.blockId).toBe("1");
+    });
+
     it("search ranks fixture queries with Hit@10 >= 75%", async () => {
       const indexer = getIndexer();
       const blocks = loadBlocksFixture();

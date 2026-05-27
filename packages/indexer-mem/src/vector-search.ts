@@ -1,6 +1,9 @@
 import type { DocumentPath, EmbeddingSearchResult } from "@statewalker/indexer-api";
 
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+  if (a.length !== b.length) {
+    throw new Error(`cosineSimilarity: dimensionality mismatch (${a.length} vs ${b.length})`);
+  }
   let dot = 0;
   let normA = 0;
   let normB = 0;

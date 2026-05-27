@@ -27,7 +27,8 @@
     "format": "biome format --write ."
   },
   "dependencies": {
-    "@statewalker/indexer-api": "workspace:*"
+    "@statewalker/indexer-api": "workspace:*",
+    "@statewalker/indexer-search": "workspace:*"
   },
   "peerDependencies": {
     "vitest": "*"

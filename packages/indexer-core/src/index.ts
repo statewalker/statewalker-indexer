@@ -1,0 +1,39 @@
+// @statewalker/indexer-core — workspace-internal scaffolding shared by @statewalker/indexer-* backends.
+// Not published to npm. Consumed via workspace:* by sibling backend packages only.
+
+export { toAsyncIterable } from "./async.js";
+export { compositeKey } from "./composite-key.js";
+export { type CompositeIndexOptions, createCompositeIndex } from "./create-composite-index.js";
+export {
+  createPersistenceBackedIndexer,
+  type PersistenceBackedIndexerOptions,
+} from "./create-persistence-backed-indexer.js";
+export {
+  createSqlBackedIndexer,
+  type SqlBackedDialect,
+  type SqlBackedIndexerOptions,
+} from "./create-sql-backed-indexer.js";
+export {
+  createSqlFtsRetriever,
+  type SqlFtsDialect,
+  type SqlFtsRetrieverOptions,
+} from "./create-sql-fts-retriever.js";
+export {
+  createSqlVectorRetriever,
+  type SqlVectorDialect,
+  type SqlVectorRetrieverOptions,
+} from "./create-sql-vector-retriever.js";
+export { mergeByRRF, mergeByWeights } from "./merge.js";
+export { matchesPrefix } from "./path-prefix.js";
+export { readEntryBytes, singleChunk, toBytes } from "./persistence-bytes.js";
+export { type RankedList, reciprocalRankFusion } from "./rrf.js";
+export { createSerialiser } from "./run-exclusive.js";
+export { sanitizePrefix } from "./sanitize-prefix.js";
+export type { SqlDb } from "./sql-db.js";
+export {
+  buildPathPrefixesSql,
+  buildPathPrefixSql,
+  escapeLikePattern,
+  type PathPrefixSql,
+} from "./sql-path-prefix.js";
+export { validateDimensionality } from "./validate-dimensionality.js";

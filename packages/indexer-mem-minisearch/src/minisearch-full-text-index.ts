@@ -9,6 +9,7 @@ import type {
   Metadata,
   PathSelector,
 } from "@statewalker/indexer-api";
+import { compositeKey, matchesPrefix, toAsyncIterable } from "@statewalker/indexer-core";
 import MiniSearch from "minisearch";
 
 interface StoredBlock {
@@ -16,14 +17,6 @@ interface StoredBlock {
   blockId: string;
   content: string;
   metadata?: Metadata;
-}
-
-function compositeKey(path: DocumentPath, blockId: string): string {
-  return `${path}\0${blockId}`;
-}
-
-function matchesPrefix(path: DocumentPath, prefix: DocumentPath): boolean {
-  return path.startsWith(prefix);
 }
 
 export class MiniSearchFullTextIndex implements FullTextIndex {
@@ -157,7 +150,7 @@ export class MiniSearchFullTextIndex implements FullTextIndex {
     pathSelectors: PathSelector[] | AsyncIterable<PathSelector>,
   ): Promise<void> {
     this.ensureOpen();
-    for await (const sel of pathSelectors as AsyncIterable<PathSelector>) {
+    for await (const sel of toAsyncIterable(pathSelectors)) {
       if (sel.blockId !== undefined) {
         const key = compositeKey(sel.path, sel.blockId);
         this.removeByKey(key);
@@ -281,23 +274,26 @@ export class MiniSearchFullTextIndex implements FullTextIndex {
       keys: string[];
     };
 
-    const index = new MiniSearchFullTextIndex(info);
+    if (parsed.version !== 3) {
+      throw new Error(
+        `MiniSearchFullTextIndex: unsupported serialised version ${String(parsed.version)} (expected 3)`,
+      );
+    }
 
-    if (parsed.version === 3) {
-      index.miniSearch = MiniSearch.loadJSON(JSON.stringify(parsed.miniSearch), {
-        fields: ["content"],
-        idField: "key",
+    const index = new MiniSearchFullTextIndex(info);
+    index.miniSearch = MiniSearch.loadJSON(JSON.stringify(parsed.miniSearch), {
+      fields: ["content"],
+      idField: "key",
+    });
+    index.keySet = new Set(parsed.keys);
+    for (const block of parsed.blocks) {
+      const key = compositeKey(block.path as DocumentPath, block.blockId);
+      index.blocks.set(key, {
+        path: block.path as DocumentPath,
+        blockId: block.blockId,
+        content: block.content,
+        metadata: block.metadata,
       });
-      index.keySet = new Set(parsed.keys);
-      for (const block of parsed.blocks) {
-        const key = compositeKey(block.path as DocumentPath, block.blockId);
-        index.blocks.set(key, {
-          path: block.path as DocumentPath,
-          blockId: block.blockId,
-          content: block.content,
-          metadata: block.metadata,
-        });
-      }
     }
 
     return index;
