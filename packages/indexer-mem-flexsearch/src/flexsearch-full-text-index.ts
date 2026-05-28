@@ -1,16 +1,27 @@
 import type {
   BlockReference,
   DocumentPath,
+  Metadata,
+  PathSelector,
+  PersistableSearchIndex,
+  PersistenceEntry,
+} from "@statewalker/indexer-api";
+import {
+  compositeKey,
+  matchesPrefix,
+  readEntryBytes,
+  singleChunk,
+  toAsyncIterable,
+  toBytes,
+} from "@statewalker/indexer-core";
+import type {
   FullTextBlock,
   FullTextIndex,
   FullTextIndexInfo,
-  FullTextSearchParams,
-  FullTextSearchResult,
-  Metadata,
-  PathSelector,
-} from "@statewalker/indexer-api";
-import { compositeKey, matchesPrefix, toAsyncIterable } from "@statewalker/indexer-core";
-import FlexSearch from "flexsearch";
+  FulltextQuery as FullTextSearchParams,
+  FulltextResult as FullTextSearchResult,
+} from "@statewalker/indexer-fulltext";
+import FlexSearch, { type Index as FlexIndex } from "flexsearch";
 
 interface StoredBlock {
   path: DocumentPath;
@@ -19,9 +30,13 @@ interface StoredBlock {
   metadata?: Metadata;
 }
 
-export class FlexSearchFullTextIndex implements FullTextIndex {
+export class FlexSearchFullTextIndex
+  implements
+    FullTextIndex,
+    PersistableSearchIndex<FullTextBlock, FullTextSearchParams, FullTextSearchResult>
+{
   private readonly info: FullTextIndexInfo;
-  private flexIndex: FlexSearch.Index;
+  private flexIndex: FlexIndex;
   private keyToNum = new Map<string, number>();
   private numToKey = new Map<number, string>();
   private blocks = new Map<string, StoredBlock>();
@@ -135,7 +150,8 @@ export class FlexSearchFullTextIndex implements FullTextIndex {
 
   async *search(params: FullTextSearchParams): AsyncGenerator<FullTextSearchResult> {
     this.ensureOpen();
-    const { queries, topK, paths } = params;
+    const { queries, paths } = params;
+    const topK = params.topK ?? 100;
 
     if (!queries || queries.length === 0) return;
 
@@ -287,6 +303,37 @@ export class FlexSearchFullTextIndex implements FullTextIndex {
     this.cachedSerialized = undefined;
     this.dirty = true;
     this.closed = true;
+  }
+
+  // --- PersistableSearchIndex --------------------------------------------------
+
+  /**
+   * Stream the FTS sub-index's state as a single named entry. The composite
+   * prefixes this with `${indexName}/${subName}/` before it hits persistence.
+   */
+  async *serialise(): AsyncIterable<PersistenceEntry> {
+    const json = await this.serialize();
+    yield { name: "json", content: singleChunk(toBytes(json)) };
+  }
+
+  /** Restore the FTS sub-index from a previously-produced entry set. */
+  async loadFrom(entries: Iterable<PersistenceEntry>): Promise<void> {
+    this.ensureOpen();
+    for (const e of entries) {
+      if (e.name !== "json") continue;
+      const bytes = await readEntryBytes(e);
+      const json = new TextDecoder().decode(bytes);
+      const rebuilt = FlexSearchFullTextIndex.deserialize(this.info, json);
+      // Adopt the rebuilt instance's internal state.
+      this.flexIndex = rebuilt.flexIndex;
+      this.keyToNum = rebuilt.keyToNum;
+      this.numToKey = rebuilt.numToKey;
+      this.blocks = rebuilt.blocks;
+      this.nextNum = rebuilt.nextNum;
+      this.cachedSerialized = json;
+      this.dirty = false;
+      return;
+    }
   }
 
   /**

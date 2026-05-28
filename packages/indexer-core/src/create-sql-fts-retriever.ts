@@ -1,14 +1,16 @@
 import type {
   BlockReference,
   DocumentPath,
-  FullTextBlock,
-  FullTextIndex,
-  FullTextIndexInfo,
-  FullTextSearchParams,
-  FullTextSearchResult,
   Metadata,
   PathSelector,
 } from "@statewalker/indexer-api";
+import type {
+  FullTextBlock,
+  FullTextIndex,
+  FullTextIndexInfo,
+  FulltextQuery as FullTextSearchParams,
+  FulltextResult as FullTextSearchResult,
+} from "@statewalker/indexer-fulltext";
 import { toAsyncIterable } from "./async.js";
 import { compositeKey } from "./composite-key.js";
 import type { SqlDb } from "./sql-db.js";
@@ -109,7 +111,10 @@ export function createSqlFtsRetriever(opts: SqlFtsRetrieverOptions): FullTextInd
 
     async *search(params: FullTextSearchParams): AsyncGenerator<FullTextSearchResult> {
       ensureOpen();
-      const { queries, topK, paths } = params;
+      const { queries, paths } = params;
+      // Sub-queries may omit `topK` to defer to the composite's top-level cutoff;
+      // for the per-stream SQL we use a generous default so RRF has material.
+      const topK = params.topK ?? 100;
       if (!queries || queries.length === 0) return;
 
       await ensureRebuilt();

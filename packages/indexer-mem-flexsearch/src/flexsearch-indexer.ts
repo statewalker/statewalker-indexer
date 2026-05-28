@@ -1,20 +1,20 @@
 import type { Indexer, IndexerPersistence } from "@statewalker/indexer-api";
 import { createPersistenceBackedIndexer } from "@statewalker/indexer-core";
-import { MemVectorIndex } from "@statewalker/indexer-mem";
-import { FlexSearchFullTextIndex } from "./flexsearch-full-text-index.js";
+import { memVectorProvider } from "@statewalker/indexer-mem";
+import { flexSearchFullTextProvider } from "./flexsearch-provider.js";
 
 export interface FlexSearchIndexerOptions {
   persistence?: IndexerPersistence;
 }
 
+/**
+ * In-memory Indexer combining FlexSearch full-text and brute-force vector
+ * sub-indexes via the Provider model. Multiple sub-indexes of either modality
+ * can be created on one Index (e.g. English and French FTS sub-indexes).
+ */
 export function createFlexSearchIndexer(options?: FlexSearchIndexerOptions): Indexer {
-  return createPersistenceBackedIndexer<FlexSearchFullTextIndex, MemVectorIndex>({
+  return createPersistenceBackedIndexer({
     persistence: options?.persistence,
-    createFts: (info) => new FlexSearchFullTextIndex(info),
-    serializeFts: (fts) => fts.serialize(),
-    deserializeFts: (info, data) => FlexSearchFullTextIndex.deserialize(info, data),
-    createVec: (info) => new MemVectorIndex(info),
-    serializeVec: (vec) => vec.serializeToArrow(),
-    deserializeVec: (info, data) => MemVectorIndex.deserializeFromArrow(info, data),
+    providers: [flexSearchFullTextProvider, memVectorProvider],
   });
 }

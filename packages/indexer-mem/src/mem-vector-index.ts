@@ -1,20 +1,26 @@
 import type {
   BlockReference,
   DocumentPath,
-  EmbeddingBlock,
-  EmbeddingIndex,
-  EmbeddingIndexInfo,
-  EmbeddingSearchParams,
-  EmbeddingSearchResult,
   Metadata,
   PathSelector,
+  PersistableSearchIndex,
+  PersistenceEntry,
 } from "@statewalker/indexer-api";
 import {
   compositeKey,
   matchesPrefix,
+  readEntryBytes,
+  singleChunk,
   toAsyncIterable,
   validateDimensionality,
 } from "@statewalker/indexer-core";
+import type {
+  VectorBlock as EmbeddingBlock,
+  VectorIndex as EmbeddingIndex,
+  VectorIndexInfo as EmbeddingIndexInfo,
+  VectorQuery as EmbeddingSearchParams,
+  VectorResult as EmbeddingSearchResult,
+} from "@statewalker/indexer-vector";
 import {
   fixedSizeList,
   float32,
@@ -32,7 +38,11 @@ interface StoredEntry {
   metadata?: Metadata;
 }
 
-export class MemVectorIndex implements EmbeddingIndex {
+export class MemVectorIndex
+  implements
+    EmbeddingIndex,
+    PersistableSearchIndex<EmbeddingBlock, EmbeddingSearchParams, EmbeddingSearchResult>
+{
   private readonly info: EmbeddingIndexInfo;
   private readonly entries = new Map<string, StoredEntry>();
   private closed = false;
@@ -84,7 +94,10 @@ export class MemVectorIndex implements EmbeddingIndex {
 
   async *search(params: EmbeddingSearchParams): AsyncGenerator<EmbeddingSearchResult> {
     this.ensureOpen();
-    const { embeddings, topK, paths } = params;
+    const { embeddings, paths } = params;
+    // Sub-queries may omit `topK` to defer to the composite's top-level cutoff;
+    // when unset we retrieve generously so RRF has material to fuse.
+    const topK = params.topK ?? 100;
 
     if (!embeddings || embeddings.length === 0) return;
 
@@ -257,6 +270,48 @@ export class MemVectorIndex implements EmbeddingIndex {
     this.cachedSerialized = bytes;
     this.dirty = false;
     return bytes;
+  }
+
+  // --- PersistableSearchIndex --------------------------------------------------
+
+  /**
+   * Stream the vector sub-index's state as a single named entry. The composite
+   * prefixes this with `${indexName}/${subName}/` before it hits persistence.
+   */
+  async *serialise(): AsyncIterable<PersistenceEntry> {
+    yield { name: "arrow", content: singleChunk(this.serializeToArrow()) };
+  }
+
+  /**
+   * Restore the vector sub-index from a previously-produced entry set. Expects
+   * one entry named `"arrow"`; ignores entries with other names so future
+   * additions remain forward-compatible.
+   */
+  async loadFrom(entries: Iterable<PersistenceEntry>): Promise<void> {
+    this.ensureOpen();
+    for (const e of entries) {
+      if (e.name !== "arrow") continue;
+      const bytes = await readEntryBytes(e);
+      const table = tableFromIPC(bytes);
+      const pathCol = table.getChild("path");
+      const blockIdCol = table.getChild("blockId");
+      const embCol = table.getChild("embedding");
+      const metaCol = table.getChild("metadata");
+      this.entries.clear();
+      for (let i = 0; i < table.numRows; i++) {
+        const path = pathCol.at(i) as string as DocumentPath;
+        const blockId = blockIdCol.at(i) as string;
+        const embedding = new Float32Array(embCol.at(i) as ArrayLike<number>);
+        const metaRaw = metaCol?.at(i) as string | null | undefined;
+        const metadata =
+          metaRaw == null ? undefined : (JSON.parse(metaRaw) as StoredEntry["metadata"]);
+        const key = compositeKey(path, blockId);
+        this.entries.set(key, { path, blockId, embedding, metadata });
+      }
+      this.cachedSerialized = bytes;
+      this.dirty = false;
+      return;
+    }
   }
 
   /**

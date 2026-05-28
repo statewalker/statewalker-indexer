@@ -32,7 +32,9 @@
     "format": "biome format --write ."
   },
   "dependencies": {
-    "@statewalker/indexer-api": "workspace:*"
+    "@statewalker/indexer-api": "workspace:*",
+    "@statewalker/indexer-fulltext": "workspace:*",
+    "@statewalker/indexer-vector": "workspace:*"
   },
   "devDependencies": {
     "rimraf": "catalog:",

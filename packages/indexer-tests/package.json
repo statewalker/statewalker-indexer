@@ -28,7 +28,9 @@
   },
   "dependencies": {
     "@statewalker/indexer-api": "workspace:*",
-    "@statewalker/indexer-search": "workspace:*"
+    "@statewalker/indexer-fulltext": "workspace:*",
+    "@statewalker/indexer-search": "workspace:*",
+    "@statewalker/indexer-vector": "workspace:*"
   },
   "peerDependencies": {
     "vitest": "*"

@@ -2,24 +2,25 @@ import type { Index } from "./contract/index.js";
 import type { Metadata } from "./contract/types.js";
 
 /**
- * Parameters for creating a new hybrid search index.
+ * Parameters for creating a new composite index.
  *
- * At least one of `fulltext` or `vector` must be provided — an index with
- * neither sub-index has no search capability.
+ * `subIndexes` is a `Record` keyed by user-chosen **sub-index name**. Each
+ * value is an arbitrary record carrying the modality `type` discriminator
+ * (used by the Indexer to find the matching `ModalityProvider`) plus the
+ * modality's typed config fields. Use a modality package's typed
+ * `set{Modality}Config(params, name, config)` helper rather than writing
+ * this map directly.
  */
 export interface CreateIndexParams {
   /** Unique name identifying the index within the {@link Indexer}. */
   name: string;
+  /** Optional index-level metadata. */
+  metadata?: Metadata;
   /**
-   * Configuration for the full-text search sub-index.
-   * When omitted, the index will not support FTS queries.
+   * Per-sub-index creation config, keyed by user-chosen **sub-index name**.
+   * Each value carries a `type` discriminator plus modality-specific fields.
    */
-  fulltext?: { language: string; metadata?: Metadata };
-  /**
-   * Configuration for the vector / embedding sub-index.
-   * When omitted, the index will not support vector similarity search.
-   */
-  vector?: { dimensionality: number; model: string; metadata?: Metadata };
+  subIndexes?: Record<string, { type: string } & Record<string, unknown>>;
   /**
    * When `true`, an existing index with the same name is deleted and
    * recreated. When `false` (default), creating a duplicate name throws.
@@ -38,61 +39,70 @@ export interface IndexInfo {
 }
 
 /**
- * Top-level entry point for managing hybrid search indexes.
+ * Per-sub-index load action passed to {@link Indexer.getIndex}.
+ *
+ * - `{ skip: true }` — do not register a binding for this name on the loaded
+ *   Index. Saved bytes remain on disk and are preserved until the next save
+ *   rewrites the manifest without this name.
+ * - `{ type, ...config }` — reinit: the Provider for `type` is called with this
+ *   config; `loadFrom` is NOT invoked. The supplied config replaces the saved
+ *   config in the next manifest write.
+ *
+ * Absence of an entry for a given name means "adopt": the Provider rebuilds
+ * the sub-index from the saved config and (if persistable) loads saved bytes.
+ */
+export type LoadAction = { skip: true } | ({ type: string } & Record<string, unknown>);
+
+/** Options passed to {@link Indexer.getIndex}. */
+export interface GetIndexOptions {
+  /** Per-name load actions. Names omitted default to "adopt saved state". */
+  subIndexes?: Record<string, LoadAction>;
+  /**
+   * Policy for names in the saved manifest whose modality `type` has no
+   * matching runtime Provider. Default is `"throw"`; `"warn"` logs and treats
+   * the name as skipped.
+   */
+  onMissingProvider?: "throw" | "warn";
+}
+
+/**
+ * Top-level entry point for managing composite indexes.
  *
  * An {@link Indexer} acts as a registry / factory: it creates, opens, lists,
- * and deletes named {@link Index} instances that may combine full-text and
- * vector sub-indexes.
+ * and deletes named {@link Index} instances, each an open registry of named
+ * sub-indexes.
  */
 export interface Indexer {
-  /**
-   * List all indexes known to this indexer.
-   *
-   * @returns Summary information for every registered index.
-   */
+  /** List all indexes known to this indexer. */
   getIndexNames(): Promise<IndexInfo[]>;
 
   /**
    * Create a new index with the given configuration.
    *
-   * @param params  Index name, sub-index configs, and overwrite flag.
-   * @returns The newly created {@link Index}.
    * @throws If an index with the same name already exists and `overwrite` is `false`.
+   * @throws If any entry in `params.subIndexes` carries a `type` with no
+   *         registered Provider.
    */
   createIndex(params: CreateIndexParams): Promise<Index>;
 
   /**
-   * Open an existing index by name.
+   * Open an existing index by name. Applies per-sub-index load actions.
    *
-   * @returns The {@link Index} if it exists, or `null` otherwise.
+   * @returns The opened Index, or `null` if no Index with `name` exists.
+   * @throws Under `onMissingProvider: "throw"` (default), throws when any
+   *         saved sub-index `type` has no matching runtime Provider.
    */
-  getIndex(name: string): Promise<Index | null>;
+  getIndex(name: string, options?: GetIndexOptions): Promise<Index | null>;
 
-  /**
-   * Check whether an index with the given name exists.
-   */
+  /** Check whether an index with the given name exists. */
   hasIndex(name: string): Promise<boolean>;
 
-  /**
-   * Permanently delete an index and all its contents.
-   *
-   * @throws If the index does not exist (implementations may also silently ignore).
-   */
+  /** Permanently delete an index and all its contents. */
   deleteIndex(name: string): Promise<void>;
 
-  /**
-   * Persist any pending state to storage without closing the indexer.
-   *
-   * Implementations backed by in-memory buffers or write-ahead logs should
-   * ensure all data is durable after this call returns.
-   */
+  /** Persist any pending state to storage without closing the indexer. */
   flush(): Promise<void>;
 
-  /**
-   * Close the indexer and release all associated resources.
-   *
-   * All open indexes are closed. After this call the indexer instance
-   * should be considered unusable.
-   */
+  /** Close the indexer and release all associated resources. */
   close(): Promise<void>;
 }

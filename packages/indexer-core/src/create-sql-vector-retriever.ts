@@ -1,13 +1,11 @@
+import type { BlockReference, DocumentPath, PathSelector } from "@statewalker/indexer-api";
 import type {
-  BlockReference,
-  DocumentPath,
-  EmbeddingBlock,
-  EmbeddingIndex,
-  EmbeddingIndexInfo,
-  EmbeddingSearchParams,
-  EmbeddingSearchResult,
-  PathSelector,
-} from "@statewalker/indexer-api";
+  VectorBlock as EmbeddingBlock,
+  VectorIndex as EmbeddingIndex,
+  VectorIndexInfo as EmbeddingIndexInfo,
+  VectorQuery as EmbeddingSearchParams,
+  VectorResult as EmbeddingSearchResult,
+} from "@statewalker/indexer-vector";
 import { toAsyncIterable } from "./async.js";
 import { compositeKey } from "./composite-key.js";
 import type { SqlDb } from "./sql-db.js";
@@ -110,7 +108,8 @@ export function createSqlVectorRetriever(opts: SqlVectorRetrieverOptions): Embed
 
     async *search(params: EmbeddingSearchParams): AsyncGenerator<EmbeddingSearchResult> {
       ensureOpen();
-      const { embeddings, topK, paths } = params;
+      const { embeddings, paths } = params;
+      const topK = params.topK ?? 100;
       if (!embeddings || embeddings.length === 0) return;
 
       const bestScores = new Map<string, EmbeddingSearchResult>();

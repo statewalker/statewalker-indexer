@@ -1,18 +1,17 @@
 // =============================================================================
-// Indexer Contract — Data Types
+// Indexer Contract — Data Types (kernel)
 //
-// Pure data shapes used by every backend implementation and the application-
-// side strategy stack (`@statewalker/indexer-search`). Zero runtime.
+// Modality-agnostic data shapes. Full-text / vector specific types live in
+// `@statewalker/indexer-fulltext` and `@statewalker/indexer-vector`. Zero
+// modality knowledge here.
 //
 // Logical layout:
 //   1. Primitives        (DocumentPath, BlockId, Metadata)
 //   2. References        (BlockReference, PathSelector)
-//   3. Block types       (IndexedBlock, FullTextBlock, EmbeddingBlock)
-//   4. Search params     (FullTextSearchParams, EmbeddingSearchParams, HybridSearchParams)
-//   5. Search results    (FullTextSearchResult, EmbeddingSearchResult, HybridSearchResult)
-//   6. Hybrid weights    (HybridWeights)
-//   7. Ranking primitive (ScoredItem)
-//   8. Embed function    (EmbedFn)
+//   3. Search request    (SearchRequest)
+//   4. Search results    (ScoredHit, SearchResult)
+//   5. Ranking primitive (ScoredItem)
+//   6. Embed function    (EmbedFn)
 // =============================================================================
 
 // =============================================================================
@@ -24,11 +23,9 @@
  *
  * Must start with `"/"`. Paths act as grouping keys — all blocks sharing
  * the same path belong to the same logical document. Path prefixes are used
- * throughout the API for filtering (e.g. `"/docs/"` matches `"/docs/a"`,
- * `"/docs/b"`, etc.).
+ * throughout the API for filtering (e.g. `"/docs/"` matches `"/docs/a"`).
  *
  * @example "/documents/readme/"
- * @example "/projects/alpha/specs/"
  */
 export type DocumentPath = `/${string}`;
 
@@ -52,7 +49,7 @@ export type Metadata = Record<string, unknown>;
 
 /**
  * Uniquely identifies a single block in the index by its document path
- * and block id. Used in search results and for point lookups / selections.
+ * and block id. The one identity that crosses modality boundaries.
  */
 export type BlockReference = {
   /** Document this block belongs to. */
@@ -64,172 +61,77 @@ export type BlockReference = {
 /**
  * Selector for bulk selection. Identifies documents by a path prefix and,
  * optionally, a specific block within those documents.
- *
- * - If only `path` is provided, all blocks under that path prefix are selected.
- * - If `blockId` is also provided, only the matching block is selected.
  */
 export type PathSelector = {
   /** Path prefix selecting the target documents. */
   path: DocumentPath;
-  /** Optional specific block to select; when omitted all blocks under `path` are selected. */
+  /** Optional specific block to select; when omitted all blocks under `path`. */
   blockId?: BlockId;
 };
 
 // =============================================================================
-// 3. Block types
+// 3. Search request
 // =============================================================================
 
 /**
- * A block of content to be added to the hybrid index.
+ * Top-level input to {@link Index.search}.
  *
- * At least one of `content` or `embedding` must be provided — a block with
- * neither has nothing to index. When both are present the block is indexed
- * in both the FTS and vector sub-indexes.
- */
-export interface IndexedBlock extends BlockReference {
-  /** Text content for full-text indexing. Required if the index has an FTS sub-index. */
-  content?: string;
-  /** Embedding vector for similarity search. Required if the index has a vector sub-index. */
-  embedding?: Float32Array;
-  /** Optional metadata stored alongside the block. */
-  metadata?: Metadata;
-}
-
-/**
- * A block of text content for the full-text sub-index.
+ * Carries shared filters (`paths`, `topK`) plus a `subQueries` map keyed by
+ * **sub-index name** holding modality-specific payloads. Presence of a name in
+ * `subQueries` is what activates the corresponding sub-index. Use the kernel
+ * helpers {@link setSubQuery} / {@link getSubQuery} or a modality Access handle
+ * to read/write entries instead of mutating the map directly.
  *
- * Unlike {@link IndexedBlock}, `content` is required here since the FTS
- * index cannot operate without text.
+ * `topK` is the final blended cutoff; `paths` is the default scope. Individual
+ * sub-queries MAY override both for their own retrieval.
  */
-export interface FullTextBlock extends BlockReference {
-  /** The text content to be indexed for full-text search. */
-  content: string;
-  /** Optional metadata stored alongside the block. */
-  metadata?: Metadata;
-}
-
-/**
- * A block carrying an embedding vector for the vector sub-index.
- *
- * Unlike {@link IndexedBlock}, `embedding` is required here since the
- * vector index cannot operate without a vector.
- */
-export interface EmbeddingBlock extends BlockReference {
-  /** The embedding vector (dense float array) representing this block's content. */
-  embedding: Float32Array;
-  /** Optional metadata stored alongside the block. */
-  metadata?: Metadata;
-}
-
-// =============================================================================
-// 4. Search parameters
-// =============================================================================
-
-/**
- * Weights controlling how FTS and embedding scores are blended in hybrid
- * search. Both values are relative — only their ratio matters.
- *
- * @example { fts: 0.7, embedding: 0.3 }
- */
-export interface HybridWeights {
-  /** Weight assigned to full-text search scores. */
-  fts: number;
-  /** Weight assigned to embedding similarity scores. */
-  embedding: number;
-}
-
-/**
- * Parameters for a full-text search query against the FTS sub-index.
- */
-export interface FullTextSearchParams {
-  /** Path prefixes to restrict the search scope. When empty, searches all documents. */
+export interface SearchRequest {
+  /** Path prefixes to restrict the search scope. Defaults to the entire index. */
   paths?: DocumentPath[];
-  /** One or more FTS queries. Blocks matching more queries rank higher. */
-  queries: string[];
-  /** Maximum number of results to return. */
+  /** Maximum number of blended results to return. */
   topK: number;
-}
-
-/**
- * Parameters for a vector similarity search against the embedding sub-index.
- */
-export interface EmbeddingSearchParams {
-  /** Path prefixes to restrict the search scope. When empty, searches all documents. */
-  paths?: DocumentPath[];
-  /** One or more embedding vectors to search for. Blocks matching more vectors rank higher. */
-  embeddings: Float32Array[];
-  /** Maximum number of results to return. */
-  topK: number;
-}
-
-/**
- * Parameters for a hybrid search combining FTS and vector queries.
- *
- * Both `queries` and `embeddings` are optional — providing only one of them
- * degrades the search to a single-modality search. At least one must be
- * provided for the search to produce results.
- */
-export interface HybridSearchParams {
-  /** Path prefixes to restrict the search scope. Defaults to `["/"]` (entire index). */
-  paths?: DocumentPath[];
-  /** FTS queries — blocks matching more queries rank higher. */
-  queries?: string[];
-  /** Embedding vectors — blocks closer to more vectors rank higher. */
-  embeddings?: Float32Array[];
-  /** Maximum number of results to return (total if ungrouped, per group if grouped). */
-  topK: number;
-  /** Relative weights for blending FTS and embedding scores. */
-  weights?: HybridWeights;
-  /** When true, results are grouped by document path in the output stream. */
-  groupByPath?: boolean;
+  /** Modality-specific sub-queries keyed by sub-index name. */
+  subQueries?: Record<string, unknown>;
 }
 
 // =============================================================================
-// 5. Search results
+// 4. Search results
 // =============================================================================
 
 /**
- * A single result from a full-text search, extending the block reference
- * with a text snippet and relevance score.
+ * Minimal modality-native hit: a block reference plus a native relevance score
+ * (BM25 for FTS, cosine for vector, …). Every sub-index's result type extends
+ * this, which lets the composite rank and fuse generically without knowing the
+ * modality.
  */
-export interface FullTextSearchResult extends BlockReference {
-  /** Text snippet from the matched block providing context around the match. */
-  snippet: string;
-  /** Relevance score — higher values indicate a better match. */
+export interface ScoredHit extends BlockReference {
+  /** Modality-native score — higher is a better match. */
   score: number;
 }
 
 /**
- * A single result from a vector similarity search, extending the block
- * reference with a similarity score.
+ * Top-level output of {@link Index.search}.
+ *
+ * Carries `{path, blockId}` and the RRF **fusion** `score` only. Modality-native
+ * scores and modality-specific fields (snippets, …) live in `subResults`, keyed
+ * by **sub-index name**. Use the kernel helpers {@link setSubResult} /
+ * {@link getSubResult} or a modality Access handle.
  */
-export interface EmbeddingSearchResult extends BlockReference {
-  /** Similarity score (e.g. cosine similarity) — higher values indicate closer matches. */
+export interface SearchResult extends BlockReference {
+  /** RRF fusion score across all active sub-indexes — comparable only within one search. */
   score: number;
-}
-
-/**
- * A single result from a hybrid search, carrying the blended score as well
- * as the individual FTS and embedding sub-results (either of which may be
- * null if that modality was not used or did not match).
- */
-export interface HybridSearchResult extends BlockReference {
-  /** Combined score blending FTS and embedding scores according to {@link HybridWeights}. */
-  score: number;
-  /** The FTS sub-result, or null if this block was not matched by the FTS query. */
-  fts: FullTextSearchResult | null;
-  /** The embedding sub-result, or null if this block was not matched by vector search. */
-  embedding: EmbeddingSearchResult | null;
+  /** Modality-native sub-results keyed by sub-index name. */
+  subResults?: Record<string, unknown>;
 }
 
 // =============================================================================
-// 7. Ranking primitive
+// 5. Ranking primitive
 // =============================================================================
 
 /**
- * Minimal scored item — a block reference plus a score. Used by ranking
- * and reranking utilities (RRF in `@statewalker/indexer-core`, blend-with-
- * reranker in `@statewalker/indexer-search`) as a shared primitive.
+ * Minimal scored item — a block id plus a score. Shared primitive used by
+ * ranking / reranking utilities (RRF in `@statewalker/indexer-core`, reranker
+ * blending in `@statewalker/indexer-search`).
  */
 export interface ScoredItem {
   blockId: BlockId;
@@ -237,11 +139,11 @@ export interface ScoredItem {
 }
 
 // =============================================================================
-// 8. Embedding function
+// 6. Embedding function
 // =============================================================================
 
 /**
- * Boundary type at which the application provides an embedding capability
- * to the indexer. Maps a piece of text to a dense float vector.
+ * Boundary type at which the application provides an embedding capability to
+ * the indexer. Maps a piece of text to a dense float vector.
  */
 export type EmbedFn = (text: string) => Promise<Float32Array>;

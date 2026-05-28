@@ -34,12 +34,14 @@
   "dependencies": {
     "@statewalker/indexer-api": "workspace:*",
     "@statewalker/indexer-core": "workspace:*",
+    "@statewalker/indexer-fulltext": "workspace:*",
     "@statewalker/indexer-mem": "workspace:*",
     "flexsearch": "catalog:"
   },
   "devDependencies": {
     "@statewalker/indexer-search": "workspace:*",
     "@statewalker/indexer-tests": "workspace:*",
+    "@statewalker/indexer-vector": "workspace:*",
     "rimraf": "catalog:",
     "tsdown": "catalog:",
     "typescript": "catalog:",

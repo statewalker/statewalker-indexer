@@ -1,20 +1,20 @@
 import type { Indexer, IndexerPersistence } from "@statewalker/indexer-api";
 import { createPersistenceBackedIndexer } from "@statewalker/indexer-core";
-import { MemVectorIndex } from "@statewalker/indexer-mem";
-import { MiniSearchFullTextIndex } from "./minisearch-full-text-index.js";
+import { memVectorProvider } from "@statewalker/indexer-mem";
+import { miniSearchFullTextProvider } from "./minisearch-provider.js";
 
 export interface MiniSearchIndexerOptions {
   persistence?: IndexerPersistence;
 }
 
+/**
+ * In-memory Indexer combining MiniSearch full-text and brute-force vector
+ * sub-indexes via the Provider model. Multiple sub-indexes of either modality
+ * can be created on one Index (e.g. English and French FTS sub-indexes).
+ */
 export function createMiniSearchIndexer(options?: MiniSearchIndexerOptions): Indexer {
-  return createPersistenceBackedIndexer<MiniSearchFullTextIndex, MemVectorIndex>({
+  return createPersistenceBackedIndexer({
     persistence: options?.persistence,
-    createFts: (info) => new MiniSearchFullTextIndex(info),
-    serializeFts: (fts) => fts.serialize(),
-    deserializeFts: (info, data) => MiniSearchFullTextIndex.deserialize(info, data),
-    createVec: (info) => new MemVectorIndex(info),
-    serializeVec: (vec) => vec.serializeToArrow(),
-    deserializeVec: (info, data) => MemVectorIndex.deserializeFromArrow(info, data),
+    providers: [miniSearchFullTextProvider, memVectorProvider],
   });
 }

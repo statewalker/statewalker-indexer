@@ -12,7 +12,15 @@ Modern search applications need more than keyword matching. They need to combine
 
 Each of these capabilities can be backed by very different storage engines — in-memory structures, SQLite/PGlite, DuckDB, or external services. Without a shared abstraction, application code becomes tightly coupled to a specific backend, making it hard to swap implementations, test in isolation, or run the same logic in different environments (browser, Node, edge).
 
-`@statewalker/indexer-api` solves this by defining a **pure-interface contract** with **zero runtime exports**. Application code programs against the API; concrete backends are injected at startup. The strategy stack (search pipeline, query parser, semantic index, reranker blending, mocks) lives in [`@statewalker/indexer-search`](../indexer-search/README.md).
+`@statewalker/indexer-api` solves this by defining a **slim kernel contract**:
+
+- Modality-agnostic types: `Index`, `Indexer`, `SearchRequest`, `SearchResult`, `SubIndexBinding`, `ModalityProvider`, `PersistableSearchIndex`, `SearchIndex` base, primitives (`DocumentPath`, `BlockId`, `BlockReference`, `PathSelector`, `Metadata`, `ScoredHit`, `ScoredItem`, `EmbedFn`, `IndexerPersistence`).
+- Four name-parametric runtime helpers — `getSubQuery<Q>(req, name)`, `setSubQuery<Q>(req, name, q)`, `getSubResult<R>(res, name)`, `setSubResult<R>(res, name, r)` — used to read/write a sub-index's sub-query or sub-result by **runtime sub-index name**. The kernel never knows modality types; the caller supplies the type via the generic.
+- One structural guard: `isPersistable(index)` — does this `SearchIndex` opt into persistence?
+
+Modality-specific types, Providers (backend-facing construction), and Access handles (user-facing ergonomics) live in dedicated packages (`@statewalker/indexer-fulltext`, `@statewalker/indexer-vector`); a new modality is a new package that touches nothing here. Multiple sub-indexes of the same modality (e.g. two full-text sub-indexes for English and French summaries of the same chunks) are supported — each registered under its own user-chosen name.
+
+Application code programs against the kernel and modality packages; concrete backends are injected at startup. The strategy stack (search pipeline, query parser, reranker blending, mocks) lives in [`@statewalker/indexer-search`](../indexer-search/README.md).
 
 ## How it works
 

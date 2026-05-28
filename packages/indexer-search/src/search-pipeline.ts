@@ -1,9 +1,25 @@
+// =============================================================================
+// SearchPipeline — app-side orchestrator over an `Index`.
+//
+// Stages: EXPAND (prompt → typed queries) → EMBED (semantic queries) → SEARCH
+// (caller-built `SearchRequest` → `Index.search` → `SearchResult` stream) →
+// RERANK (optional; uses caller-supplied content lookup) → CITE (optional).
+//
+// The pipeline is modality-agnostic: it does not know "fulltext" or "vector".
+// The caller supplies a `buildRequest` callback that turns the orchestrated
+// query material (lex queries, vec queries, embeddings) into a `SearchRequest`
+// with `subQueries` populated under the caller-chosen sub-index names. The
+// caller likewise supplies `getContent` for content lookups used by the rerank
+// and citation stages.
+// =============================================================================
+
 import type {
+  BlockId,
   DocumentPath,
   EmbedFn,
-  HybridSearchResult,
-  HybridWeights,
   Index,
+  SearchRequest,
+  SearchResult,
 } from "@statewalker/indexer-api";
 import type {
   Citation,
@@ -16,8 +32,29 @@ import { type BlendTier, blendWithReranker } from "./reranker-blend.js";
 
 export type PipelineErrorStage = "expansion" | "rerank" | "citations";
 
+/**
+ * Context handed to {@link PipelineConfig.buildRequest}. Carries the assembled
+ * query material plus the pipeline's `paths`/`topK` defaults.
+ */
+export interface BuildRequestContext {
+  paths?: DocumentPath[];
+  topK: number;
+  prompt?: string;
+  lexQueries: string[];
+  vecQueries: string[];
+  embeddings: Float32Array[];
+}
+
+/** Content lookup callback used by the rerank and citation stages. */
+export type GetContentFn = (blockId: BlockId, path: DocumentPath) => Promise<string | undefined>;
+
 export interface PipelineConfig {
   index: Index;
+  /** Build the modality-agnostic `SearchRequest` for `Index.search`. */
+  buildRequest: (ctx: BuildRequestContext) => SearchRequest;
+  /** Required only when the rerank or citation stages run. */
+  getContent?: GetContentFn;
+  /** Required only when semantic queries are supplied. */
   embedFn?: EmbedFn;
   expander?: QueryExpanderFn;
   reranker?: RerankerFn;
@@ -28,9 +65,6 @@ export interface PipelineConfig {
    * When supplied, the pipeline calls this before falling back to the documented
    * degradation behaviour. When omitted, errors are silently swallowed and the
    * pipeline still produces results from the surviving stages.
-   *
-   * Callers that want strict failure semantics should re-throw from inside
-   * `onError` — the pipeline itself never re-throws stage errors.
    */
   onError?: (stage: PipelineErrorStage, error: unknown) => void;
 }
@@ -60,7 +94,6 @@ export class SearchPipeline {
   private _semanticQueries: string[] = [];
   private _embeddings: Float32Array[] = [];
   private _topK = 10;
-  private _weights?: HybridWeights;
   private _explain = false;
   private _reranker?: RerankerFn;
   private readonly _skip = new Set<SkipStage>();
@@ -99,11 +132,6 @@ export class SearchPipeline {
     return this;
   }
 
-  setWeights(weights: HybridWeights): this {
-    this._weights = weights;
-    return this;
-  }
-
   setExplain(explain: boolean): this {
     this._explain = explain;
     return this;
@@ -120,7 +148,7 @@ export class SearchPipeline {
   }
 
   async execute(): Promise<PipelineEntry[]> {
-    const { index, embedFn, blendTiers, onError } = this.config;
+    const { index, embedFn, buildRequest, getContent, blendTiers, onError } = this.config;
     const expander = !this._skip.has("expansion") ? this.config.expander : undefined;
     const reranker = !this._skip.has("rerank")
       ? (this._reranker ?? this.config.reranker)
@@ -168,21 +196,24 @@ export class SearchPipeline {
     }
 
     // 2. EMBED semantic queries
-    const embeddedVecs: Float32Array[] = [...precomputedEmbeddings];
+    const embeddings: Float32Array[] = [...precomputedEmbeddings];
     if (embedFn && vecQueries.length > 0) {
       const embedded = await Promise.all(vecQueries.map((q) => embedFn(q)));
-      embeddedVecs.push(...embedded);
+      embeddings.push(...embedded);
     }
 
-    // 3. SEARCH — single call, delegate multi-query fusion to the index
-    const results: HybridSearchResult[] = [];
-    for await (const r of index.search({
-      queries: lexQueries.length > 0 ? lexQueries : undefined,
-      embeddings: embeddedVecs.length > 0 ? embeddedVecs : undefined,
-      topK: this._topK,
-      weights: this._weights,
+    // 3. SEARCH — let the caller turn query material into a SearchRequest
+    const request = buildRequest({
       paths: this._paths,
-    })) {
+      topK: this._topK,
+      prompt: this._prompt,
+      lexQueries,
+      vecQueries,
+      embeddings,
+    });
+
+    const results: SearchResult[] = [];
+    for await (const r of index.search(request)) {
       results.push(r);
     }
 
@@ -201,30 +232,14 @@ export class SearchPipeline {
         : {}),
     }));
 
-    // Resolve actual block content once for downstream stages (rerank + cite).
-    const fts = index.getFullTextIndex();
-    const contentByBlockId = new Map<string, string>();
-    if (fts && entries.length > 0) {
-      const wanted = new Set(entries.map((e) => e.blockId));
-      const prefixes = new Set(entries.map((e) => e.path));
-      for (const prefix of prefixes) {
-        for await (const block of fts.getDocumentsBlocks(prefix)) {
-          if (wanted.has(block.blockId)) {
-            contentByBlockId.set(block.blockId, block.content);
-          }
-        }
-      }
-    }
-    const contentFor = (blockId: string): string => contentByBlockId.get(blockId) ?? "";
-
-    // 4. RERANK
-    if (reranker && entries.length > 0) {
+    // 4. RERANK — optional; needs `getContent` to fetch block text.
+    if (reranker && entries.length > 0 && getContent) {
       const queryForRerank = this._prompt ?? lexQueries[0] ?? vecQueries[0] ?? "";
       const entryByBlockId = new Map(entries.map((e) => [e.blockId, e]));
-      const candidates = entries.map((e) => ({
-        blockId: e.blockId,
-        text: contentFor(e.blockId),
-      }));
+      const texts = await Promise.all(
+        entries.map(async (e) => (await getContent(e.blockId, e.path)) ?? ""),
+      );
+      const candidates = entries.map((e, i) => ({ blockId: e.blockId, text: texts[i] ?? "" }));
       try {
         const rerankResults = await reranker(queryForRerank, candidates);
         const rerankScores = new Map(rerankResults.map((r) => [r.blockId, r.score]));
@@ -252,13 +267,15 @@ export class SearchPipeline {
       }
     }
 
-    // 5. CITE
-    if (citationBuilder && !this._skip.has("citations") && entries.length > 0) {
+    // 5. CITE — optional; needs `getContent` to fetch block text.
+    if (citationBuilder && !this._skip.has("citations") && entries.length > 0 && getContent) {
       const queryForCite = this._prompt ?? lexQueries[0] ?? vecQueries[0] ?? "";
       try {
-        const citations = await citationBuilder(queryForCite, entries, async (blockId) =>
-          contentFor(blockId),
-        );
+        const citations = await citationBuilder(queryForCite, entries, async (blockId) => {
+          const entry = entries.find((e) => e.blockId === blockId);
+          if (!entry) return "";
+          return (await getContent(blockId, entry.path)) ?? "";
+        });
         const citationMap = new Map(citations.map((c) => [c.blockId, c]));
         for (const entry of entries) {
           const cit = citationMap.get(entry.blockId);

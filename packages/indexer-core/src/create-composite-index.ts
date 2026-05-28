@@ -1,264 +1,169 @@
 import type {
-  BlockReference,
-  DocumentPath,
-  EmbeddingIndex,
-  FullTextIndex,
-  HybridSearchParams,
-  HybridSearchResult,
+  AnySubIndexBinding,
   Index,
-  IndexedBlock,
   Metadata,
   PathSelector,
+  ScoredHit,
+  SearchRequest,
+  SearchResult,
 } from "@statewalker/indexer-api";
+import { setSubResult } from "@statewalker/indexer-api";
 import { toAsyncIterable } from "./async.js";
 import { compositeKey } from "./composite-key.js";
-import { mergeByRRF, mergeByWeights } from "./merge.js";
+import { type RankedList, reciprocalRankFusion } from "./rrf.js";
 
+/**
+ * Options for {@link createCompositeIndex}.
+ *
+ * Modality-agnostic: the composite accepts a set of {@link AnySubIndexBinding}s
+ * and fans out generically by **sub-index name**. Backends register bindings —
+ * each is the slim `{ name, type, config, index }` 4-tuple — and may pass an
+ * `onAfterDelete` / `onDeleteIndex` hook to reclaim shared rows.
+ */
 export interface CompositeIndexOptions {
   name: string;
-  fts: FullTextIndex | null;
-  vec: EmbeddingIndex | null;
   metadata?: Metadata;
-  /** Engine-specific count implementation. Defaults to a sub-index union for in-memory backends. */
-  getSize?: (pathPrefix?: DocumentPath) => Promise<number>;
-  /** Engine-specific cleanup invoked by `deleteIndex()` AFTER sub-indexes are deleted. SQL backends pass a closure here to `DROP TABLE` the shared docs table. */
-  onDeleteIndex?: () => Promise<void>;
-  /** Engine-specific hook invoked by `deleteDocuments()` AFTER both sub-indexes finish. SQL backends pass a closure here to reclaim rows in the shared docs table whose `doc_id` no longer appears in any sub-index. */
+  /** Initial bindings; more may be added later via `setBinding`. */
+  bindings?: AnySubIndexBinding[];
+  /** Hook invoked after every binding's `deleteDocuments` returns. */
   onAfterDelete?: () => Promise<void>;
+  /** Hook invoked after every binding's `deleteIndex` returns. */
+  onDeleteIndex?: () => Promise<void>;
 }
 
 /**
- * Engine-agnostic composite `Index` that delegates FTS and vector retrieval to sub-indexes and merges results
- * via RRF or weighted linear blend. Replaces `MemIndex` / `DuckDbIndex` / `PGLiteIndex`.
+ * Engine-agnostic composite {@link Index}: an open registry of named sub-index
+ * bindings that fan out lifecycle and blend search results by RRF.
+ *
+ * `Index.search` iterates registered bindings and runs each binding whose
+ * **name** appears in `request.subQueries`, then fuses the ranked streams via
+ * {@link reciprocalRankFusion}. The top-level `score` is always the RRF fusion
+ * score; modality-native magnitudes survive on each binding's sub-result
+ * (attached under `binding.name` in `result.subResults`).
  */
 export function createCompositeIndex(opts: CompositeIndexOptions): Index {
-  const { name, fts, vec, metadata, onDeleteIndex, onAfterDelete } = opts;
+  const { name, metadata, onAfterDelete, onDeleteIndex } = opts;
+  const bindings = new Map<string, AnySubIndexBinding>();
+  for (const b of opts.bindings ?? []) bindings.set(b.name, b);
   let closed = false;
 
   const ensureOpen = (): void => {
     if (closed) throw new Error(`Index "${name}" is closed`);
   };
 
-  const defaultGetSize = async (pathPrefix?: DocumentPath): Promise<number> => {
-    const seen = new Set<string>();
-    if (fts) {
-      for await (const ref of fts.getDocumentBlocksRefs(pathPrefix)) {
-        seen.add(compositeKey(ref.path, ref.blockId));
-      }
-    }
-    if (vec) {
-      for await (const ref of vec.getDocumentBlocksRefs(pathPrefix)) {
-        seen.add(compositeKey(ref.path, ref.blockId));
-      }
-    }
-    return seen.size;
-  };
-
-  const getSize = opts.getSize ?? defaultGetSize;
-
   return {
     name,
     metadata,
 
-    async *search(params: HybridSearchParams): AsyncGenerator<HybridSearchResult> {
-      ensureOpen();
-      const { queries, embeddings, topK, weights, paths } = params;
+    // --- Registry ------------------------------------------------------------
 
-      const hasQueries = queries && queries.length > 0 && fts !== null;
-      const hasEmbeddings = embeddings && embeddings.length > 0 && vec !== null;
-
-      if (!hasQueries && !hasEmbeddings) return;
-
-      const ftsResults = [];
-      if (hasQueries) {
-        for await (const r of fts.search({ queries, topK, paths })) {
-          ftsResults.push(r);
-        }
-      }
-
-      const vecResults = [];
-      if (hasEmbeddings) {
-        for await (const r of vec.search({ embeddings, topK, paths })) {
-          vecResults.push(r);
-        }
-      }
-
-      let merged: HybridSearchResult[];
-      if (ftsResults.length > 0 && vecResults.length > 0) {
-        merged = weights
-          ? mergeByWeights(ftsResults, vecResults, weights, topK)
-          : mergeByRRF(ftsResults, vecResults, topK);
-      } else if (ftsResults.length > 0) {
-        merged = ftsResults.map((r) => ({
-          path: r.path,
-          blockId: r.blockId,
-          score: r.score,
-          fts: r,
-          embedding: null,
-        }));
-      } else {
-        merged = vecResults.map((r) => ({
-          path: r.path,
-          blockId: r.blockId,
-          score: r.score,
-          fts: null,
-          embedding: r,
-        }));
-      }
-
-      for (const r of merged.slice(0, topK)) yield r;
+    setBinding(binding: AnySubIndexBinding): void {
+      bindings.set(binding.name, binding);
+    },
+    getBinding(key: string): AnySubIndexBinding | undefined {
+      return bindings.get(key);
+    },
+    getBindings(): Iterable<AnySubIndexBinding> {
+      return bindings.values();
     },
 
-    async addDocument(blocks: IndexedBlock[]): Promise<void> {
-      ensureOpen();
-      const ftsBlocks = [];
-      const vecBlocks = [];
+    // --- Search --------------------------------------------------------------
 
-      for (const block of blocks) {
-        if (block.content !== undefined && fts !== null) {
-          ftsBlocks.push({
-            path: block.path,
-            blockId: block.blockId,
-            content: block.content,
-            metadata: block.metadata,
-          });
+    async *search(request: SearchRequest): AsyncGenerator<SearchResult> {
+      ensureOpen();
+
+      // Active = registered ∧ name present in request.subQueries. Each active
+      // binding contributes one ranked stream, in registration order.
+      type Active = {
+        binding: AnySubIndexBinding;
+        hits: Map<string, ScoredHit>;
+        order: string[]; // compositeKey order = retrieval rank
+        ids: Map<string, { path: SearchResult["path"]; blockId: string }>;
+      };
+
+      const subQueries = request.subQueries;
+      if (!subQueries) return;
+
+      const active: Active[] = [];
+      for (const binding of bindings.values()) {
+        const q = subQueries[binding.name];
+        if (q === undefined) continue;
+        const hits = new Map<string, ScoredHit>();
+        const order: string[] = [];
+        const ids = new Map<string, { path: SearchResult["path"]; blockId: string }>();
+        // Sub-index's `search` is typed Q→R; we erased through unknown via the
+        // existential binding shape — the runtime invariant is that the
+        // sub-query under this name matches the sub-index's expected shape.
+        for await (const hit of binding.index.search(q)) {
+          const ck = compositeKey(hit.path, hit.blockId);
+          if (!hits.has(ck)) {
+            hits.set(ck, hit);
+            ids.set(ck, { path: hit.path, blockId: hit.blockId });
+            order.push(ck);
+          }
         }
-        if (block.embedding !== undefined && vec !== null) {
-          vecBlocks.push({
-            path: block.path,
-            blockId: block.blockId,
-            embedding: block.embedding,
-            metadata: block.metadata,
-          });
-        }
+        active.push({ binding, hits, order, ids });
       }
 
-      if (ftsBlocks.length > 0) await fts?.addDocument(ftsBlocks);
-      if (vecBlocks.length > 0) await vec?.addDocument(vecBlocks);
-    },
+      if (active.length === 0) return;
 
-    async addDocuments(
-      blocks: Iterable<IndexedBlock[]> | AsyncIterable<IndexedBlock[]>,
-    ): Promise<void> {
-      ensureOpen();
-      for await (const batch of blocks) {
-        await this.addDocument(batch);
+      const lists: RankedList[] = active.map((a) => ({
+        results: a.order.map((ck) => ({ blockId: ck, score: a.hits.get(ck)?.score ?? 0 })),
+        meta: { source: a.binding.name, queryType: a.binding.type, query: "" },
+      }));
+
+      const fused = reciprocalRankFusion(lists, request.topK);
+
+      for (const item of fused) {
+        const ck = item.blockId;
+        let pathBlockId: { path: SearchResult["path"]; blockId: string } | undefined;
+        for (const a of active) {
+          const ids = a.ids.get(ck);
+          if (ids) {
+            pathBlockId = ids;
+            break;
+          }
+        }
+        if (!pathBlockId) continue;
+        const result: SearchResult = {
+          path: pathBlockId.path,
+          blockId: pathBlockId.blockId,
+          score: item.score,
+        };
+        for (const a of active) {
+          const hit = a.hits.get(ck);
+          if (hit) setSubResult(result, a.binding.name, hit);
+        }
+        yield result;
       }
     },
+
+    // --- Lifecycle -----------------------------------------------------------
 
     async deleteDocuments(
       pathSelectors: PathSelector[] | AsyncIterable<PathSelector>,
     ): Promise<void> {
       ensureOpen();
       const selectors: PathSelector[] = [];
-      for await (const sel of toAsyncIterable(pathSelectors)) {
-        selectors.push(sel);
-      }
-      if (fts !== null) await fts.deleteDocuments(selectors);
-      if (vec !== null) await vec.deleteDocuments(selectors);
+      for await (const sel of toAsyncIterable(pathSelectors)) selectors.push(sel);
+      for (const b of bindings.values()) await b.index.deleteDocuments(selectors);
       if (onAfterDelete) await onAfterDelete();
-    },
-
-    async getSize(pathPrefix?: DocumentPath): Promise<number> {
-      ensureOpen();
-      return getSize(pathPrefix);
-    },
-
-    async *getDocumentPaths(pathPrefix?: DocumentPath): AsyncGenerator<DocumentPath> {
-      ensureOpen();
-      const paths = new Set<string>();
-      if (fts) {
-        for await (const p of fts.getDocumentPaths(pathPrefix)) paths.add(p);
-      }
-      if (vec) {
-        for await (const p of vec.getDocumentPaths(pathPrefix)) paths.add(p);
-      }
-      for (const p of paths) yield p as DocumentPath;
-    },
-
-    async *getDocumentBlocksRefs(pathPrefix?: DocumentPath): AsyncGenerator<BlockReference> {
-      ensureOpen();
-      const seen = new Set<string>();
-      if (fts) {
-        for await (const ref of fts.getDocumentBlocksRefs(pathPrefix)) {
-          const key = compositeKey(ref.path, ref.blockId);
-          if (!seen.has(key)) {
-            seen.add(key);
-            yield ref;
-          }
-        }
-      }
-      if (vec) {
-        for await (const ref of vec.getDocumentBlocksRefs(pathPrefix)) {
-          const key = compositeKey(ref.path, ref.blockId);
-          if (!seen.has(key)) {
-            seen.add(key);
-            yield ref;
-          }
-        }
-      }
-    },
-
-    async *getDocumentsBlocks(pathPrefix?: DocumentPath): AsyncGenerator<IndexedBlock> {
-      ensureOpen();
-      const blockMap = new Map<string, IndexedBlock>();
-
-      if (fts) {
-        for await (const b of fts.getDocumentsBlocks(pathPrefix)) {
-          blockMap.set(compositeKey(b.path, b.blockId), {
-            path: b.path,
-            blockId: b.blockId,
-            content: b.content,
-            metadata: b.metadata,
-          });
-        }
-      }
-      if (vec) {
-        for await (const b of vec.getDocumentsBlocks(pathPrefix)) {
-          const key = compositeKey(b.path, b.blockId);
-          const existing = blockMap.get(key);
-          if (existing) {
-            existing.embedding = b.embedding;
-            if (!existing.metadata) existing.metadata = b.metadata;
-          } else {
-            blockMap.set(key, {
-              path: b.path,
-              blockId: b.blockId,
-              embedding: b.embedding,
-              metadata: b.metadata,
-            });
-          }
-        }
-      }
-
-      for (const block of blockMap.values()) yield block;
-    },
-
-    getFullTextIndex(): FullTextIndex | null {
-      return fts;
-    },
-
-    getVectorIndex(): EmbeddingIndex | null {
-      return vec;
-    },
-
-    async close(_options?: { force?: boolean }): Promise<void> {
-      if (closed) return;
-      closed = true;
-      if (fts !== null) await fts.close();
-      if (vec !== null) await vec.close();
     },
 
     async flush(): Promise<void> {
       ensureOpen();
-      if (fts !== null) await fts.flush();
-      if (vec !== null) await vec.flush();
+      for (const b of bindings.values()) await b.index.flush();
+    },
+
+    async close(options?: { force?: boolean }): Promise<void> {
+      if (closed) return;
+      closed = true;
+      for (const b of bindings.values()) await b.index.close(options);
     },
 
     async deleteIndex(): Promise<void> {
       ensureOpen();
-      if (fts !== null) await fts.deleteIndex();
-      if (vec !== null) await vec.deleteIndex();
+      for (const b of bindings.values()) await b.index.deleteIndex();
       if (onDeleteIndex) await onDeleteIndex();
       closed = true;
     },

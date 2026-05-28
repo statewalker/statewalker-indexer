@@ -1,4 +1,5 @@
-import type { DocumentPath, EmbeddingSearchResult } from "@statewalker/indexer-api";
+import type { DocumentPath } from "@statewalker/indexer-api";
+import type { VectorResult as EmbeddingSearchResult } from "@statewalker/indexer-vector";
 
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   if (a.length !== b.length) {

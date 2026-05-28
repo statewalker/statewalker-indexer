@@ -34,6 +34,8 @@
   "dependencies": {
     "@statewalker/indexer-api": "workspace:*",
     "@statewalker/indexer-core": "workspace:*",
+    "@statewalker/indexer-fulltext": "workspace:*",
+    "@statewalker/indexer-vector": "workspace:*",
     "@statewalker/db-api": "catalog:"
   },
   "devDependencies": {

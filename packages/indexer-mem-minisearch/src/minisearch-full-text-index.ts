@@ -1,15 +1,26 @@
 import type {
   BlockReference,
   DocumentPath,
+  Metadata,
+  PathSelector,
+  PersistableSearchIndex,
+  PersistenceEntry,
+} from "@statewalker/indexer-api";
+import {
+  compositeKey,
+  matchesPrefix,
+  readEntryBytes,
+  singleChunk,
+  toAsyncIterable,
+  toBytes,
+} from "@statewalker/indexer-core";
+import type {
   FullTextBlock,
   FullTextIndex,
   FullTextIndexInfo,
-  FullTextSearchParams,
-  FullTextSearchResult,
-  Metadata,
-  PathSelector,
-} from "@statewalker/indexer-api";
-import { compositeKey, matchesPrefix, toAsyncIterable } from "@statewalker/indexer-core";
+  FulltextQuery as FullTextSearchParams,
+  FulltextResult as FullTextSearchResult,
+} from "@statewalker/indexer-fulltext";
 import MiniSearch from "minisearch";
 
 interface StoredBlock {
@@ -19,7 +30,11 @@ interface StoredBlock {
   metadata?: Metadata;
 }
 
-export class MiniSearchFullTextIndex implements FullTextIndex {
+export class MiniSearchFullTextIndex
+  implements
+    FullTextIndex,
+    PersistableSearchIndex<FullTextBlock, FullTextSearchParams, FullTextSearchResult>
+{
   private readonly info: FullTextIndexInfo;
   private miniSearch: MiniSearch;
   private blocks = new Map<string, StoredBlock>();
@@ -96,7 +111,8 @@ export class MiniSearchFullTextIndex implements FullTextIndex {
 
   async *search(params: FullTextSearchParams): AsyncGenerator<FullTextSearchResult> {
     this.ensureOpen();
-    const { queries, topK, paths } = params;
+    const { queries, paths } = params;
+    const topK = params.topK ?? 100;
 
     if (!queries || queries.length === 0) return;
 
@@ -233,6 +249,31 @@ export class MiniSearchFullTextIndex implements FullTextIndex {
     this.blocks.clear();
     this.keySet.clear();
     this.closed = true;
+  }
+
+  // --- PersistableSearchIndex --------------------------------------------------
+
+  /**
+   * Stream the FTS sub-index's state as a single named entry. The composite
+   * prefixes this with `${indexName}/${subName}/` before it hits persistence.
+   */
+  async *serialise(): AsyncIterable<PersistenceEntry> {
+    yield { name: "json", content: singleChunk(toBytes(this.serialize())) };
+  }
+
+  /** Restore the FTS sub-index from a previously-produced entry set. */
+  async loadFrom(entries: Iterable<PersistenceEntry>): Promise<void> {
+    this.ensureOpen();
+    for (const e of entries) {
+      if (e.name !== "json") continue;
+      const bytes = await readEntryBytes(e);
+      const json = new TextDecoder().decode(bytes);
+      const rebuilt = MiniSearchFullTextIndex.deserialize(this.info, json);
+      this.miniSearch = rebuilt.miniSearch;
+      this.blocks = rebuilt.blocks;
+      this.keySet = rebuilt.keySet;
+      return;
+    }
   }
 
   /** Serialize to JSON (v3 format with path data) */

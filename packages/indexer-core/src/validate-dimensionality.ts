@@ -1,7 +1,7 @@
-import type { EmbeddingIndexInfo } from "@statewalker/indexer-api";
+import type { VectorIndexInfo } from "@statewalker/indexer-vector";
 
 export function validateDimensionality(
-  info: Pick<EmbeddingIndexInfo, "dimensionality">,
+  info: Pick<VectorIndexInfo, "dimensionality">,
   embedding: Float32Array,
 ): void {
   if (embedding.length !== info.dimensionality) {

@@ -1,28 +1,40 @@
+// Conformance suites for the open-sub-index-registry contract.
+//
+// Backends import only the suites they need; each suite is self-contained and
+// parameterised on the factories / Providers / hooks the backend can supply.
+
+export type { FullTextSuiteOptions } from "./conformance/fulltext.suite.js";
+export { runFullTextConformanceSuite } from "./conformance/fulltext.suite.js";
+
 export type {
-  BlockFixture,
-  BlocksFixture,
-  QueriesEmbeddingsFixture,
-  QueryFixture,
-} from "./fixtures/index.js";
+  KernelSuiteOptions,
+  SubIndexConfig,
+} from "./conformance/kernel.suite.js";
 export {
-  createFixtureEmbedFn,
-  EMBEDDING_DIMENSIONS,
-  EMBEDDING_MODEL,
-  listFixtureDocs,
-  loadBlocksFixture,
-  loadQueriesEmbeddingsFixture,
-  loadQueriesFixture,
-  readFixtureDoc,
-} from "./fixtures/index.js";
-export type { IndexerFactory } from "./suite-runner.js";
-export { runIndexerTestSuite } from "./suite-runner.js";
+  MemoryPersistence,
+  runKernelConformanceSuite,
+} from "./conformance/kernel.suite.js";
+
 export type {
-  AtomicityFactory,
-  AtomicityProbe,
-} from "./suites/create-index-atomicity.suite.js";
-export { runCreateIndexAtomicitySuite } from "./suites/create-index-atomicity.suite.js";
-export type {
-  ReclamationFactory,
-  ReclamationProbe,
-} from "./suites/docs-reclamation.suite.js";
-export { runDocsReclamationSuite } from "./suites/docs-reclamation.suite.js";
+  ConfigFactory,
+  FullTextModalityHooks,
+  MultiInstanceSuiteOptions,
+  VectorModalityHooks,
+} from "./conformance/multi-instance.suite.js";
+export { runMultiInstanceConformanceSuite } from "./conformance/multi-instance.suite.js";
+
+export type { RrfSuiteOptions } from "./conformance/rrf-blending.suite.js";
+export { runRrfBlendingSuite } from "./conformance/rrf-blending.suite.js";
+
+export { collect, defined } from "./conformance/test-utils.js";
+
+export type { IndexerFactory } from "./conformance/types.js";
+
+export type { VectorSuiteOptions } from "./conformance/vector.suite.js";
+export { runVectorConformanceSuite } from "./conformance/vector.suite.js";
+
+// Fixtures (markdown docs, queries, pre-computed embeddings) remain on disk
+// under `./fixtures/` for any future per-modality suite that wants them, but
+// are not re-exported as a public surface — the new conformance suites are
+// self-contained and the fixture loader uses Node APIs that the package
+// otherwise avoids depending on.

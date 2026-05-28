@@ -1,4 +1,4 @@
-import type { FullTextIndexInfo } from "@statewalker/indexer-api";
+import type { FullTextIndexInfo } from "@statewalker/indexer-fulltext";
 import { describe, expect, it } from "vitest";
 import { MiniSearchFullTextIndex } from "../src/minisearch-full-text-index.js";
 
