@@ -47,6 +47,28 @@ export function runFullTextConformanceSuite(
       expect(hits[0]?.score).toBeGreaterThan(0);
     });
 
+    it("a block matching more queries ranks above blocks matching fewer", async () => {
+      // Contract (FulltextQuery.queries): "blocks matching more queries rank higher."
+      // Disjoint vocabularies, so each query matches exactly its named blocks: the
+      // multi-matcher hits all three queries, each single-matcher hits exactly one.
+      const index = provider.create(config);
+      await index.addDocument([
+        { path: "/d/all", blockId: "all", content: "alpha beta gamma" },
+        { path: "/d/a", blockId: "a", content: "alpha" },
+        { path: "/d/b", blockId: "b", content: "beta" },
+        { path: "/d/c", blockId: "c", content: "gamma" },
+      ]);
+      const hits = await collect(index.search({ queries: ["alpha", "beta", "gamma"], topK: 10 }));
+      // The block matching all three queries must outrank every single-query match —
+      // a max-merge (vs the required accumulation) buries it below them.
+      expect(hits[0]?.blockId).toBe("all");
+      const allScore = hits.find((h) => h.blockId === "all")?.score ?? 0;
+      for (const id of ["a", "b", "c"]) {
+        const score = hits.find((h) => h.blockId === id)?.score ?? 0;
+        expect(allScore).toBeGreaterThan(score);
+      }
+    });
+
     it("getSize and getDocumentPaths reflect ingestion", async () => {
       const index = provider.create(config);
       await index.addDocument([{ path: "/d/1", blockId: "b1", content: "alpha" }]);

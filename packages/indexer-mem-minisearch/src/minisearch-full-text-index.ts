@@ -116,22 +116,33 @@ export class MiniSearchFullTextIndex
 
     if (!queries || queries.length === 0) return;
 
-    const bestScores = new Map<string, FullTextSearchResult>();
+    // Multi-query: search for each and ACCUMULATE per-block scores, so a block
+    // matching more queries ranks higher (the FulltextQuery contract). Taking the
+    // max instead would let a block that is the top hit for one query outrank a
+    // block matching several queries. The snippet is kept from the strongest
+    // single-query match.
+    const merged = new Map<string, { result: FullTextSearchResult; best: number; total: number }>();
 
     for (const query of queries) {
       const results = this.searchInternal(query, topK, paths);
       for (const r of results) {
         const key = compositeKey(r.path, r.blockId);
-        const existing = bestScores.get(key);
-        if (!existing || r.score > existing.score) {
-          bestScores.set(key, r);
+        const existing = merged.get(key);
+        if (!existing) {
+          merged.set(key, { result: r, best: r.score, total: r.score });
+        } else {
+          existing.total += r.score;
+          if (r.score > existing.best) {
+            existing.best = r.score;
+            existing.result = r;
+          }
         }
       }
     }
 
-    const sorted = [...bestScores.values()].sort((a, b) => b.score - a.score);
-    for (const r of sorted.slice(0, topK)) {
-      yield r;
+    const sorted = [...merged.values()].sort((a, b) => b.total - a.total);
+    for (const { result, total } of sorted.slice(0, topK)) {
+      yield { ...result, score: total };
     }
   }
 
