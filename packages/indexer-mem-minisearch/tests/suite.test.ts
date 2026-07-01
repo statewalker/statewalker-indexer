@@ -10,6 +10,7 @@ import { newFullTextAccess } from "@statewalker/indexer-fulltext";
 import { memVectorProvider } from "@statewalker/indexer-mem";
 import {
   runFullTextConformanceSuite,
+  runFullTextMultiWordSuite,
   runKernelConformanceSuite,
   runMultiInstanceConformanceSuite,
   runRrfBlendingSuite,
@@ -63,6 +64,9 @@ runRrfBlendingSuite("MiniSearch FTS", {
       ...(topK !== undefined ? { topK } : {}),
     }) satisfies FulltextQuery,
 });
+
+// Cross-backend multi-word FTS contract (partial match, coverage-ranked).
+runFullTextMultiWordSuite("MiniSearch FTS", { factory, config: ftConfig });
 
 runMultiInstanceConformanceSuite("MiniSearch + MemVector", {
   factory,

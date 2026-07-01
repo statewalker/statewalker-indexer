@@ -14,6 +14,7 @@ import { newFullTextAccess } from "@statewalker/indexer-fulltext";
 import { memVectorProvider } from "@statewalker/indexer-mem";
 import {
   runFullTextConformanceSuite,
+  runFullTextMultiWordSuite,
   runKernelConformanceSuite,
   runMultiInstanceConformanceSuite,
   runRrfBlendingSuite,
@@ -70,6 +71,9 @@ runRrfBlendingSuite("FlexSearch FTS", {
       ...(topK !== undefined ? { topK } : {}),
     }) satisfies FulltextQuery,
 });
+
+// Cross-backend multi-word FTS contract (partial match, coverage-ranked).
+runFullTextMultiWordSuite("FlexSearch FTS", { factory, config: ftConfig });
 
 // Multi-instance scenarios — two FTS langs, two vectors, mixed.
 runMultiInstanceConformanceSuite("FlexSearch + MemVector", {

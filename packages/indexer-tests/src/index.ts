@@ -5,6 +5,8 @@
 
 export type { FullTextSuiteOptions } from "./conformance/fulltext.suite.js";
 export { runFullTextConformanceSuite } from "./conformance/fulltext.suite.js";
+export type { FullTextMultiWordSuiteOptions } from "./conformance/fulltext-multiword.suite.js";
+export { runFullTextMultiWordSuite } from "./conformance/fulltext-multiword.suite.js";
 
 export type {
   KernelSuiteOptions,

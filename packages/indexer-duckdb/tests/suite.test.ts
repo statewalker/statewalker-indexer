@@ -18,6 +18,7 @@ import { sanitizePrefix } from "@statewalker/indexer-core";
 import type { FulltextQuery } from "@statewalker/indexer-fulltext";
 import { newFullTextAccess } from "@statewalker/indexer-fulltext";
 import {
+  runFullTextMultiWordSuite,
   runKernelConformanceSuite,
   runMultiInstanceConformanceSuite,
   runRrfBlendingSuite,
@@ -62,6 +63,9 @@ runRrfBlendingSuite("DuckDB FTS", {
       ...(topK !== undefined ? { topK } : {}),
     }) satisfies FulltextQuery,
 });
+
+// Cross-backend multi-word FTS contract (partial match, coverage-ranked).
+runFullTextMultiWordSuite("DuckDB FTS", { factory: inMemFactory, config: ftConfig });
 
 runMultiInstanceConformanceSuite("DuckDB Indexer", {
   factory: inMemFactory,

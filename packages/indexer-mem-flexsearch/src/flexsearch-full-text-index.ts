@@ -91,36 +91,19 @@ export class FlexSearchFullTextIndex
     topK: number,
     pathPrefixes?: DocumentPath[],
   ): FullTextSearchResult[] {
-    const ids = this.flexIndex.search(query, topK * 3) as number[];
+    // `suggest: true` relaxes the default all-terms-AND for a multi-word query into a
+    // ranked partial match — sections are ordered by how much of the term set they match
+    // (FlexSearch's own resolution scoring), instead of returning nothing unless one
+    // section contains every term. For single-word or fully-intersecting queries it is
+    // identical to the default, so it only ever broadens recall, never narrows it.
+    const ids = this.flexIndex.search(query, topK * 3, { suggest: true }) as number[];
 
-    let results: Array<{ key: string; score: number }>;
-
-    if (ids.length === 0) {
-      // Word-fallback search
-      const words = query.split(/\s+/).filter((w) => w.length > 1);
-      const scores = new Map<number, number>();
-      for (const word of words) {
-        const wordIds = this.flexIndex.search(word, topK * 3) as number[];
-        for (let i = 0; i < wordIds.length; i++) {
-          const numId = wordIds[i];
-          if (numId === undefined) continue;
-          scores.set(numId, (scores.get(numId) ?? 0) + 1 - i / wordIds.length);
-        }
-      }
-      results = [...scores.entries()]
-        .map(([numId, score]) => ({
-          key: this.numToKey.get(numId) ?? "",
-          score,
-        }))
-        .filter((r) => r.key !== "");
-    } else {
-      results = ids
-        .map((numId, rank) => ({
-          key: this.numToKey.get(numId) ?? "",
-          score: 1 - rank / ids.length,
-        }))
-        .filter((r) => r.key !== "");
-    }
+    let results = ids
+      .map((numId, rank) => ({
+        key: this.numToKey.get(numId) ?? "",
+        score: 1 - rank / ids.length,
+      }))
+      .filter((r) => r.key !== "");
 
     // Filter by path prefixes
     if (pathPrefixes && pathPrefixes.length > 0) {

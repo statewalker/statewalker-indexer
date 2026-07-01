@@ -69,6 +69,22 @@ export function runFullTextConformanceSuite(
       }
     });
 
+    it("a multi-word query matches sections covering only part of the term set", async () => {
+      // A single query string carrying several terms must not require a section to contain
+      // ALL of them: partial matches are returned, ranked by how much of the term set they
+      // cover. (Otherwise long keyword probes collapse to empty, and tiny wording changes
+      // flip the result set.) The section matching the most terms ranks first.
+      const index = provider.create(config);
+      await index.addDocument([
+        { path: "/d/all", blockId: "all", content: "alpha beta gamma" },
+        { path: "/d/two", blockId: "two", content: "alpha beta" },
+        { path: "/d/one", blockId: "one", content: "alpha" },
+      ]);
+      const hits = await collect(index.search({ queries: ["alpha beta gamma"], topK: 10 }));
+      expect(hits.map((h) => h.blockId)).toContain("one");
+      expect(hits[0]?.blockId).toBe("all");
+    });
+
     it("getSize and getDocumentPaths reflect ingestion", async () => {
       const index = provider.create(config);
       await index.addDocument([{ path: "/d/1", blockId: "b1", content: "alpha" }]);

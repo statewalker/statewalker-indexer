@@ -17,6 +17,7 @@ import { sanitizePrefix } from "@statewalker/indexer-core";
 import type { FulltextQuery } from "@statewalker/indexer-fulltext";
 import { newFullTextAccess } from "@statewalker/indexer-fulltext";
 import {
+  runFullTextMultiWordSuite,
   runKernelConformanceSuite,
   runMultiInstanceConformanceSuite,
   runRrfBlendingSuite,
@@ -55,6 +56,9 @@ runRrfBlendingSuite("PGLite FTS", {
       ...(topK !== undefined ? { topK } : {}),
     }) satisfies FulltextQuery,
 });
+
+// Cross-backend multi-word FTS contract (partial match, coverage-ranked).
+runFullTextMultiWordSuite("PGLite FTS", { factory, config: ftConfig });
 
 runMultiInstanceConformanceSuite("PGLite Indexer", {
   factory,
