@@ -19,6 +19,21 @@ Indexing primitives: pluggable full-text and vector indexers (in-memory, DuckDB,
 | [@statewalker/indexer-search](packages/indexer-search) | Workspace-internal app-side search-orchestration stack (SearchPipeline, embed helpers, reranker blending, mocks). QMD-port utilities live under `./utils`. | no |
 | [@statewalker/indexer-tests](packages/indexer-tests) | Shared Vitest conformance suite run by every backend. | no |
 
+## Cross-repo dependencies
+
+This repository depends on:
+
+| Repository | Packages used |
+| --- | --- |
+| [`statewalker-db`](https://github.com/statewalker/statewalker-db) | `@statewalker/db-api` |
+
+**Depended on by:** [`sandclaw`](https://github.com/statewalker/sandclaw) (`@statewalker/indexer-api`, `@statewalker/indexer-fulltext`, `@statewalker/indexer-mem-flexsearch`, `@statewalker/indexer-vector`).
+
+Cross-repo dependencies are declared `workspace:*` rather than `catalog:`. This is
+deliberate: turbo derives its task graph from `workspace:` specifiers and does **not**
+resolve `catalog:`, so a `catalog:` cross-repo dependency is invisible to the scheduler
+and its consumer can be built before it.
+
 ## Development
 
 ```sh
