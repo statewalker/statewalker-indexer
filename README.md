@@ -27,8 +27,6 @@ This repository depends on:
 | --- | --- |
 | [`statewalker-db`](https://github.com/statewalker/statewalker-db) | `@statewalker/db-api` |
 
-**Depended on by:** [`sandclaw`](https://github.com/statewalker/sandclaw) (`@statewalker/indexer-api`, `@statewalker/indexer-fulltext`, `@statewalker/indexer-mem-flexsearch`, `@statewalker/indexer-vector`).
-
 Cross-repo dependencies are declared `workspace:*` rather than `catalog:`. This is
 deliberate: turbo derives its task graph from `workspace:` specifiers and does **not**
 resolve `catalog:`, so a `catalog:` cross-repo dependency is invisible to the scheduler
