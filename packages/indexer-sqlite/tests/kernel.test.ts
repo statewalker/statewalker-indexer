@@ -164,6 +164,39 @@ for (const flavour of flavours) {
       const re = await second.getIndex("docs", { subIndexes: { a: { type: "tag", label: "z" } } });
       expect(await re?.getBinding("a")?.index.getSize()).toBe(0);
     });
+
+    it("deleteIndex on a live index also drops the tables of skipped sub-indexes", async () => {
+      const db = await flavour.open();
+      const subIndexes = { a: { type: "tag", label: "x" }, b: { type: "tag", label: "y" } };
+      const first = await createSqliteIndexer({ db, providers: [tagProvider()] });
+      const idx = await first.createIndex({ name: "docs", subIndexes });
+      await (defined(idx.getBinding("b")).index as SearchIndex<Tag, string, ScoredHit>).addDocument(
+        [{ path: "/d/1", blockId: "b1", tag: "red" }],
+      );
+      await first.close();
+
+      const second = await createSqliteIndexer({ db, providers: [tagProvider()] });
+      const live = await second.getIndex("docs", { subIndexes: { b: { skip: true } } });
+      expect(live?.getBinding("b")).toBeUndefined();
+      await second.deleteIndex("docs");
+      expect(await tables(db)).toEqual(["__indexer_manifest"]);
+
+      const recreated = await second.createIndex({ name: "docs", subIndexes });
+      expect(await defined(recreated.getBinding("b")).index.getSize()).toBe(0);
+      const hits = await collect(recreated.search({ topK: 5, subQueries: { b: "red" } }));
+      expect(hits).toEqual([]);
+    });
+
+    it("concurrent first getIndex calls open the index once", async () => {
+      const db = await flavour.open();
+      const first = await createSqliteIndexer({ db, providers: [tagProvider()] });
+      await first.createIndex({ name: "docs", subIndexes: { a: { type: "tag", label: "x" } } });
+      await first.close();
+
+      const second = await createSqliteIndexer({ db, providers: [tagProvider()] });
+      const [x, y] = await Promise.all([second.getIndex("docs"), second.getIndex("docs")]);
+      expect(x).toBe(y);
+    });
   });
 }
 

@@ -122,6 +122,10 @@ export async function createSqliteIndexer(options: SqliteIndexerOptions): Promis
       name,
       bindings,
       onDeleteIndex: async () => {
+        // Bound sub-indexes dropped themselves; skipped ones still own tables.
+        for (const [sub, spec] of Object.entries(manifest.get(name)?.subIndexes ?? {})) {
+          await providers.get(spec.type)?.drop(contextFor(name, sub, blockIds));
+        }
         await db.exec(`DROP TABLE IF EXISTS ${blockIds.table}`);
         await db.query(`DELETE FROM ${MANIFEST_TABLE} WHERE name = ?`, [name]);
         manifest.delete(name);
@@ -162,18 +166,22 @@ export async function createSqliteIndexer(options: SqliteIndexerOptions): Promis
       });
     },
 
-    async getIndex(name: string, options?: GetIndexOptions): Promise<Index | null> {
-      ensureOpen();
-      const cached = indexes.get(name);
-      if (cached) return cached;
-      const entry = manifest.get(name);
-      if (!entry) return null;
-      const { index, effective } = await openIndex(name, entry.subIndexes, options);
-      if (JSON.stringify(effective) !== JSON.stringify(entry.subIndexes)) {
-        await writeManifest(name, { subIndexes: effective });
-      }
-      indexes.set(name, index);
-      return index;
+    getIndex(name: string, options?: GetIndexOptions): Promise<Index | null> {
+      // Serialised with createIndex so concurrent first opens open once
+      // (a second reinit would otherwise drop tables the first just wrote).
+      return runExclusive(async () => {
+        ensureOpen();
+        const cached = indexes.get(name);
+        if (cached) return cached;
+        const entry = manifest.get(name);
+        if (!entry) return null;
+        const { index, effective } = await openIndex(name, entry.subIndexes, options);
+        if (JSON.stringify(effective) !== JSON.stringify(entry.subIndexes)) {
+          await writeManifest(name, { subIndexes: effective });
+        }
+        indexes.set(name, index);
+        return index;
+      });
     },
 
     async hasIndex(name: string): Promise<boolean> {
