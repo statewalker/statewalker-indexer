@@ -45,6 +45,7 @@
     "@statewalker/indexer-api": "workspace:^",
     "@statewalker/indexer-core": "workspace:^",
     "@statewalker/indexer-fulltext": "workspace:^",
+    "@statewalker/indexer-ngram": "workspace:^",
     "@statewalker/indexer-vector": "workspace:^"
   },
   "devDependencies": {
