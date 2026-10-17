@@ -50,10 +50,10 @@ export async function openBlockIds(db: Db, table: string): Promise<BlockIds> {
       for (const sel of selectors) {
         const where =
           sel.blockId !== undefined
-            ? { sql: "path = ? AND block_id = ?", params: [sel.path, sel.blockId] }
-            : pathPrefixSql("path", [sel.path]);
+            ? { sql: "b.path = ? AND b.block_id = ?", params: [sel.path, sel.blockId] }
+            : pathPrefixSql("b.path", [sel.path]);
         const rows = await tx.query<{ id: number }>(
-          `SELECT id FROM ${table} WHERE ${where.sql}`,
+          `SELECT b.id FROM ${table} b WHERE ${where.sql}`,
           where.params,
         );
         for (const r of rows) ids.add(Number(r.id));

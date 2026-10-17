@@ -7,7 +7,7 @@ import type {
   Indexer,
   IndexInfo,
 } from "@statewalker/indexer-api";
-import { createCompositeIndex, createSerialiser, sanitizePrefix } from "@statewalker/indexer-core";
+import { createCompositeIndex, createSerialiser } from "@statewalker/indexer-core";
 import { type BlockIds, openBlockIds } from "./block-ids.js";
 import type { SqliteModalityContext, SqliteModalityProvider } from "./types.js";
 
@@ -24,6 +24,10 @@ interface IndexManifest {
 }
 
 const MANIFEST_TABLE = "__indexer_manifest";
+
+/** Escapes everything but lower-case letters and digits: SQLite table names fold case, so "Docs" and "docs" must not collide. */
+const sanitizePrefix = (name: string) =>
+  name.replace(/[^a-z0-9]/g, (ch) => `_${ch.charCodeAt(0)}_`);
 
 const indexPrefix = (name: string) => `idx_${sanitizePrefix(name)}__`;
 
@@ -95,9 +99,8 @@ export async function createSqliteIndexer(options: SqliteIndexerOptions): Promis
       }
       const ctx = contextFor(name, sub, blockIds);
       const spec = action && !("skip" in action) ? (action as SubSpec) : saved;
-      if (spec !== saved) await providers.get(saved.type)?.drop(ctx);
-
       const provider = providers.get(spec.type);
+      if (provider && spec !== saved) await providers.get(saved.type)?.drop(ctx);
       if (!provider) {
         if (onMissing === "throw") {
           throw new Error(

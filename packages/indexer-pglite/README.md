@@ -11,7 +11,7 @@ It gives real PostgreSQL text search (stemming per language) and an approximate 
 ## How to use
 
 ```sh
-pnpm add @statewalker/indexer-pglite
+pnpm add @statewalker/indexer-pglite @statewalker/db-pglite @electric-sql/pglite-pgvector
 ```
 
 The indexer runs over a `Db` from `@statewalker/db-pglite`. Open it with the pgvector extension — the indexer issues `CREATE EXTENSION IF NOT EXISTS vector` and fails with `extension "vector" is not available` otherwise. The indexer never closes the `Db`; close it yourself.

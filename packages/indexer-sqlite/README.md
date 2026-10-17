@@ -119,7 +119,7 @@ gives a `Db` with the Durable Object's limits.
 
 ## Internals
 
-### Tables
+### Tables are prefixed per index and sub-index, and names are case-distinct
 
 ```
 __indexer_manifest(name, config)                      one row per Index: its sub-index configs
@@ -129,7 +129,7 @@ idx_<index>__<sub>_vec_*                              the vector engine's tables
 idx_<index>__<sub>_ng_*                               the n-gram engine's tables
 ```
 
-Index and sub-index names are sanitised into the prefixes. The vector and n-gram sub-indexes
+Index and sub-index names are escaped into the prefixes, upper-case letters included: SQLite table names ignore case, so `Docs` and `docs` become distinct prefixes and are independent indexes. The vector and n-gram sub-indexes
 compute size and listings by joining the engine's own id table with the blocks table, so nothing
 lists a block the engine does not hold, and there is no second write that a crash could separate
 from the engine's write.
@@ -148,14 +148,15 @@ The vector and n-gram engines both create a `{prefix}meta` table with different 
 provider therefore appends its own suffix (`fts`, `vec_`, `ng_`) to the sub-index prefix; a new
 provider must do the same.
 
-### Path scope uses `substr`, not `LIKE`
+### Path scope uses `substr`, not `LIKE`, and one JSON parameter
 
 A path prefix matches on component boundaries (`/foo` matches `/foo` and `/foo/x`, never
 `/foobar`) and case-sensitively (`/Docs` does not match `/docs/a`). SQLite's `LIKE` ignores ASCII
 case, and `PRAGMA case_sensitive_like` is not authorised in a Durable Object, so the condition is
-built with `substr`.
+built with `substr`. All prefixes are passed as a single JSON parameter (`json_each`), because
+a Durable Object rejects statements with more than 100 bound variables; any number of `paths` works.
 
-### Full text: FTS5
+### Full text runs on FTS5 with stemming for exactly "en"
 
 - Only the exact language `"en"` gets the Porter stemmer (`porter unicode61 remove_diacritics
   2`). Every other value, including `"en-US"` and unknown codes, gets `unicode61
@@ -170,13 +171,14 @@ built with `substr`.
   request can rank differently there. Each query is cut to `topK` before summing, so a block just
   below the cut-off in one query loses that part of its score.
 
-### Vector
+### Vector sub-indexes use cosine scores and do not store block metadata
 
 Cosine metric; `score = 1 − distance`. Several embeddings in one query keep each block's best
 score. The engine commits an `upsert` in transactions of 200 vectors: if a call fails part-way,
 the earlier batches stay written.
+`VectorBlock.metadata` is not stored. `getDocumentsBlocks` returns the cosine-normalised vectors, not the embeddings that were added.
 
-### N-gram / grep
+### N-gram sub-indexes answer grep, with a bounded candidate budget
 
 - `store` is `"fts5"` (default) or `"postings"`; both give the same results.
 - `caseSensitive` defaults to `true`, as in grep. A literal pattern is matched exactly; with
@@ -189,7 +191,22 @@ the earlier batches stay written.
   When `topK` or the engine's candidate budget (10,000 candidates) cut the search short, `grep`
   returns `truncated: true` and the hits are the ones found so far, not necessarily the blocks with
   the most matches.
-- `addDocument` hands the engine at most 500 blocks per write transaction.
+- `NgramBlock.metadata` is not stored (the full-text sub-index does store it).
+- A `paths`-scoped search spends the candidate budget on out-of-scope blocks too: the engine
+  filters by path after it cuts to the budget, so a narrow scope in a large index can return few
+  hits together with `truncated: true` although more matches exist in scope.
+- `addDocument` hands the engine at most 500 blocks per write transaction; each batch commits on
+  its own, so if a later batch fails the earlier ones stay written.
+
+### Dependencies: the Db, the engines and the modality contracts
+
+- `@statewalker/db-api` — the `Db` it runs on.
+- `@statewalker/db-sqlite` — `inTransaction` (FTS writes).
+- `@statewalker/db-sqlite-index` — the vector (`./vector`) and n-gram (`./ngram`) engines.
+- `@statewalker/indexer-api`, `@statewalker/indexer-core` — the `Indexer` contract, RRF
+  composition, shared helpers.
+- `@statewalker/indexer-fulltext`, `@statewalker/indexer-vector`, `@statewalker/indexer-ngram` —
+  the modality contracts the providers implement.
 
 ## What will surprise you
 
@@ -216,16 +233,6 @@ the earlier batches stay written.
   no registered provider throws `Cannot load index: sub-index "<name>" requires modality
   "<type>" but only [...] are registered.`; pass `{ onMissingProvider: "warn" }` to open it
   without that sub-index.
-
-### Dependencies
-
-- `@statewalker/db-api` — the `Db` it runs on.
-- `@statewalker/db-sqlite` — `inTransaction` (FTS writes).
-- `@statewalker/db-sqlite-index` — the vector (`./vector`) and n-gram (`./ngram`) engines.
-- `@statewalker/indexer-api`, `@statewalker/indexer-core` — the `Indexer` contract, RRF
-  composition, shared helpers.
-- `@statewalker/indexer-fulltext`, `@statewalker/indexer-vector`, `@statewalker/indexer-ngram` —
-  the modality contracts the providers implement.
 
 ## License
 

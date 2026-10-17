@@ -52,6 +52,18 @@ for (const flavour of flavours) {
       paths?: DocumentPath[],
     ) => collect(sub.search({ queries, ...(paths ? { paths } : {}) }));
 
+    it("scopes by more than 100 paths", async () => {
+      const { sub } = await open();
+      await sub.addDocument([
+        { path: "/d/150/x", blockId: "b", content: "needle" },
+        { path: "/other/x", blockId: "o", content: "needle" },
+      ]);
+      const paths = Array.from({ length: 150 }, (_, i) => `/d/${i}` as DocumentPath);
+      expect((await search(sub, ["needle"], paths)).map((h) => h.blockId)).toEqual([]);
+      paths.push("/d/150" as DocumentPath);
+      expect((await search(sub, ["needle"], paths)).map((h) => h.blockId)).toEqual(["b"]);
+    });
+
     it("stems English with porter and folds diacritics", async () => {
       const { sub } = await open();
       await sub.addDocument([{ path: "/d/1", blockId: "b", content: "Running café" }]);

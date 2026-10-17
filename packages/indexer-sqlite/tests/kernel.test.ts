@@ -187,6 +187,61 @@ for (const flavour of flavours) {
       expect(hits).toEqual([]);
     });
 
+    it("reinit to an unregistered type keeps the old data", async () => {
+      const db = await flavour.open();
+      const first = await createSqliteIndexer({ db, providers: [tagProvider()] });
+      const idx = await first.createIndex({
+        name: "docs",
+        subIndexes: { a: { type: "tag", label: "x" } },
+      });
+      await (defined(idx.getBinding("a")).index as SearchIndex<Tag, string, ScoredHit>).addDocument(
+        [{ path: "/d/1", blockId: "b1", tag: "red" }],
+      );
+      await first.close();
+      const second = await createSqliteIndexer({ db, providers: [tagProvider()] });
+      await expect(
+        second.getIndex("docs", { subIndexes: { a: { type: "nope" } } }),
+      ).rejects.toThrow('requires modality "nope"');
+      const again = await second.getIndex("docs");
+      expect(await again?.getBinding("a")?.index.getSize()).toBe(1);
+    });
+
+    it("index names differing only in case are independent", async () => {
+      const db = await flavour.open();
+      const indexer = await createSqliteIndexer({ db, providers: [tagProvider()] });
+      const upper = await indexer.createIndex({
+        name: "Docs",
+        subIndexes: { a: { type: "tag", label: "x" } },
+      });
+      await (
+        defined(upper.getBinding("a")).index as SearchIndex<Tag, string, ScoredHit>
+      ).addDocument([{ path: "/secret", blockId: "b1", tag: "red" }]);
+      const lower = await indexer.createIndex({
+        name: "docs",
+        subIndexes: { a: { type: "tag", label: "x" } },
+      });
+      expect(await defined(lower.getBinding("a")).index.getSize()).toBe(0);
+      expect(await collect(lower.search({ topK: 5, subQueries: { a: "red" } }))).toEqual([]);
+      await indexer.deleteIndex("docs");
+      expect(await defined(upper.getBinding("a")).index.getSize()).toBe(1);
+      expect(await collect(upper.search({ topK: 5, subQueries: { a: "red" } }))).toHaveLength(1);
+    });
+
+    it("sub-index names differing only in case are independent", async () => {
+      const db = await flavour.open();
+      const indexer = await createSqliteIndexer({ db, providers: [tagProvider()] });
+      const idx = await indexer.createIndex({
+        name: "docs",
+        subIndexes: { Body: { type: "tag", label: "x" }, body: { type: "tag", label: "y" } },
+      });
+      await (
+        defined(idx.getBinding("Body")).index as SearchIndex<Tag, string, ScoredHit>
+      ).addDocument([{ path: "/d/1", blockId: "b1", tag: "red" }]);
+      expect(await defined(idx.getBinding("body")).index.getSize()).toBe(0);
+      await defined(idx.getBinding("body")).index.deleteIndex();
+      expect(await defined(idx.getBinding("Body")).index.getSize()).toBe(1);
+    });
+
     it("concurrent first getIndex calls open the index once", async () => {
       const db = await flavour.open();
       const first = await createSqliteIndexer({ db, providers: [tagProvider()] });
@@ -208,9 +263,9 @@ describe("pathPrefixSql", () => {
       await db.query("INSERT INTO p VALUES (?)", [path]);
     }
     const run = async (prefixes: string[]) => {
-      const c = pathPrefixSql("path", prefixes);
+      const c = pathPrefixSql("t.path", prefixes);
       const rows = await db.query<{ path: string }>(
-        `SELECT path FROM p WHERE ${c.sql} ORDER BY path`,
+        `SELECT t.path AS path FROM p t WHERE ${c.sql} ORDER BY t.path`,
         c.params,
       );
       return rows.map((r) => r.path);

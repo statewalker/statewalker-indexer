@@ -52,6 +52,8 @@ const re = await grep(index, "grep", "foo[A-Z]\\w+\\(", { regex: true, topK: 20 
 Fused with other modalities in one request:
 
 ```ts
+import type { SearchRequest } from "@statewalker/indexer-api";
+
 const request: SearchRequest = { topK: 10 };
 ngram.setQuery(request, { pattern: "fooBar(", caseSensitive: false });
 // ... set the full-text / vector sub-queries on the same request ...
