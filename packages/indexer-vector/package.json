@@ -1,6 +1,6 @@
 {
   "name": "@statewalker/indexer-vector",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": false,
   "type": "module",
   "description": "Vector modality for @statewalker/indexer-api: VectorIndex types, VectorProvider, config helpers and the newVectorAccess handle.",

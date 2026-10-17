@@ -1,6 +1,6 @@
 {
   "name": "@statewalker/indexer-ngram",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": false,
   "type": "module",
   "description": "N-gram / regex (grep) modality contract for @statewalker/indexer-api: types, typed access handle and a grep helper.",

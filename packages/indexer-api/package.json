@@ -1,6 +1,6 @@
 {
   "name": "@statewalker/indexer-api",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": false,
   "type": "module",
   "description": "Backend-agnostic indexer contract: Indexer, Index as a registry of named sub-indexes, RRF search, persistence types.",

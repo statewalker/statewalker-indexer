@@ -1,6 +1,6 @@
 {
   "name": "@statewalker/indexer-pglite",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": false,
   "type": "module",
   "description": "PGlite-backed indexer implementation: full-text + vector search over a @statewalker/db-api Db.",
