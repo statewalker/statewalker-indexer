@@ -41,9 +41,11 @@
   "dependencies": {
     "@statewalker/db-api": "catalog:",
     "@statewalker/db-sqlite": "catalog:",
+    "@statewalker/db-sqlite-index": "catalog:",
     "@statewalker/indexer-api": "workspace:^",
     "@statewalker/indexer-core": "workspace:^",
-    "@statewalker/indexer-fulltext": "workspace:^"
+    "@statewalker/indexer-fulltext": "workspace:^",
+    "@statewalker/indexer-vector": "workspace:^"
   },
   "devDependencies": {
     "@statewalker/db-sqlite-do": "catalog:",

@@ -5,3 +5,4 @@ export { type BlockEntry, type Enumeration, newEnumeration } from "./enumeration
 export { newSqliteFullTextProvider } from "./fts-provider.js";
 export { pathPrefixSql } from "./path-sql.js";
 export type { SqliteModalityContext, SqliteModalityProvider } from "./types.js";
+export { newSqliteVectorProvider } from "./vector-provider.js";
