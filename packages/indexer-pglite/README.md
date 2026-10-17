@@ -16,6 +16,8 @@ pnpm add @statewalker/indexer-pglite
 
 The indexer runs over a `Db` from `@statewalker/db-pglite`. Open it with the pgvector extension — the indexer issues `CREATE EXTENSION IF NOT EXISTS vector` and fails with `extension "vector" is not available` otherwise. The indexer never closes the `Db`; close it yourself.
 
+The `Db` must come from `newPgliteDb` (PostgreSQL dialect). A SQLite `Db` typechecks, because both are `Db`, but fails at the first `CREATE EXTENSION` with `near "EXTENSION": syntax error`.
+
 - `createPGLiteIndexer({ db }): Promise<Indexer>` — `db: Db`.
 - `PGLiteIndexerOptions` — the options type.
 
