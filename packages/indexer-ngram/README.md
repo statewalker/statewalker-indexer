@@ -5,7 +5,7 @@
 The n-gram / regex modality contract for `@statewalker/indexer-api`: the block, query and result
 types, the `NGRAM_TYPE` discriminator, config helpers, a typed access handle (`newNgramAccess`) and
 a `grep` helper. It holds no engine; a backend registers a sub-index of type `"ngram"` that
-implements `NgramIndex`.
+implements `NgramIndex`. `@statewalker/indexer-sqlite` (`newSqliteNgramProvider()`) is such a backend.
 
 ## Why exact-match search needs its own modality
 

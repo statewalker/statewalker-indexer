@@ -6,7 +6,7 @@ The backend-agnostic contract for search indexes. An `Indexer` creates and opens
 
 ## Why it exists
 
-Application code should not depend on a storage engine. With this contract the same code runs against in-memory FlexSearch/MiniSearch indexes, DuckDB or PGlite, and tests can swap backends freely. The kernel knows nothing about modalities: full-text and vector types live in `@statewalker/indexer-fulltext` and `@statewalker/indexer-vector`, so adding a modality (for example a graph index) is a new package and no change here.
+Application code should not depend on a storage engine. With this contract the same code runs against in-memory FlexSearch/MiniSearch indexes, DuckDB, PGlite or SQLite, and tests can swap backends freely. The kernel knows nothing about modalities: full-text, vector and n-gram types live in `@statewalker/indexer-fulltext`, `@statewalker/indexer-vector` and `@statewalker/indexer-ngram`, so adding a modality (for example a graph index) is a new package and no change here.
 
 ## How to use
 
@@ -103,7 +103,7 @@ BM25 and cosine similarity live on different scales, so `Index.search` fuses ran
 
 - **Top-level `paths` is not a filter.** The composite in `@statewalker/indexer-core` hands each sub-index only its own sub-query. Put `paths` on each sub-query (as in the example above) or the search covers the whole index.
 - **Top-level `topK` truncates only the fused list.** Retrieval depth per sub-index is the sub-query's `topK`.
-- `createIndex` throws `Index "<name>" already exists` unless `overwrite: true`. The in-memory backends throw `Cannot create index "<name>": sub-index "<sub>" requires a provider of type "<type>" ...` for an unknown type; the SQL backends throw `Cannot create index without any subIndexes` when `subIndexes` is empty.
+- `createIndex` throws `Index "<name>" already exists` unless `overwrite: true`. The in-memory backends throw `Cannot create index "<name>": sub-index "<sub>" requires a provider of type "<type>" ...` for an unknown type, and the SQLite backend throws `Cannot load index: sub-index "<sub>" requires modality "<type>" but only [...] are registered.`; the SQL backends (DuckDB, PGlite, SQLite) throw `Cannot create index without any subIndexes` when `subIndexes` is empty.
 - `getIndex` throws `Cannot load index ...: sub-index "<sub>" requires ...` under the default `onMissingProvider: "throw"` when a saved sub-index type has no provider; with `"warn"` it logs and skips that sub-index.
 - Access handle `get(index)` throws `No sub-index named "<name>" is registered on index "<index>"`; use `tryGet` to probe.
 

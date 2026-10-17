@@ -58,9 +58,12 @@ import { vector } from "@electric-sql/pglite-pgvector";
 import { newPgliteDb } from "@statewalker/db-pglite";
 import { createPGLiteIndexer } from "@statewalker/indexer-pglite";
 
+// a directory on Node.js ("./pgdata"), IndexedDB in the browser ("idb://my-app")
 const db = await newPgliteDb({ path: "idb://my-app", extensions: { vector } });
 const indexer = await createPGLiteIndexer({ db });
-// indexer.close() does not close db; call db.close() yourself
+// ...
+await indexer.close(); // does not close db
+await db.close();
 ```
 
 ## Internals

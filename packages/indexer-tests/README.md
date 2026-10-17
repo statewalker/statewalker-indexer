@@ -8,7 +8,7 @@ Vitest conformance suites for `@statewalker/indexer-*` backends. Each suite is a
 
 ## Why it exists
 
-All backends must behave the same through the `Indexer` / `Index` contract: registry, lifecycle, manifests and load actions, path prefixes, RRF fusion, several sub-indexes of one type. Writing those tests once and running them against every backend is what keeps the backends interchangeable.
+All backends must behave the same through the `Indexer` / `Index` contract: registry, lifecycle, manifests and load actions, path prefixes, RRF fusion, several sub-indexes of one type, and the n-gram (grep) match semantics. Writing those tests once and running them against every backend is what keeps the backends interchangeable.
 
 ## How to use
 
@@ -22,6 +22,7 @@ Add as a dev dependency inside this workspace: `"@statewalker/indexer-tests": "w
 | `runVectorConformanceSuite(name, provider, { config })` | One vector sub-index from a `VectorProvider`. |
 | `runRrfBlendingSuite(name, { factory, config, populate, ... })` | Fusion order and sub-results. |
 | `runMultiInstanceConformanceSuite(...)` | Several sub-indexes of the same type on one index. |
+| `runNgramConformanceSuite(name, { factory, config })` | One n-gram sub-index (registered as `"g"`) through the `Indexer`: literal and regex matches with offsets and lines, default case sensitivity, score = match count, path scope, deletion and replacement, no match across blocks, patterns shorter than an n-gram, and `Index.search` fusion. `config` is the full sub-index config, e.g. `{ type: "ngram", store: "fts5" }`. |
 | `MemoryPersistence`, `collect`, `defined` | Test helpers. |
 
 `IndexerFactory` is `{ create(), createWithPersistence?(persistence), cleanup?() }`.
@@ -65,7 +66,7 @@ Run a backend's suites with `pnpm --filter @statewalker/indexer-mem-minisearch t
 
 - The suites are self-contained: each creates its own small data set.
 - `src/fixtures/` holds Markdown documents, queries and precomputed embeddings. They are not exported, because the loader uses Node file APIs.
-- Dependencies: `@statewalker/indexer-api`, `@statewalker/indexer-fulltext`, `@statewalker/indexer-vector`, `@statewalker/indexer-search`; peer `vitest`.
+- Dependencies: `@statewalker/indexer-api`, `@statewalker/indexer-fulltext`, `@statewalker/indexer-vector`, `@statewalker/indexer-ngram`, `@statewalker/indexer-search`; peer `vitest`.
 
 ## License
 

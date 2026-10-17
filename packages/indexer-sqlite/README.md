@@ -23,8 +23,9 @@ pnpm add @statewalker/indexer-sqlite
 
 - `createSqliteIndexer({ db, providers }): Promise<Indexer>` — `db` is a `Db` from
   `@statewalker/db-sqlite-node`, `@statewalker/db-sqlite-do` or another `@statewalker/db-sqlite*`
-  driver. Pass the providers of the modalities your indexes use; usually all three:
-  `[newSqliteFullTextProvider(), newSqliteVectorProvider(), newSqliteNgramProvider()]`.
+  driver. Pass one provider per modality your indexes use; for all three:
+  `[newSqliteFullTextProvider(), newSqliteVectorProvider(), newSqliteNgramProvider()]`. A
+  sub-index type with no provider fails `createIndex` and `getIndex` (see below).
 - The indexer never closes `db`. `indexer.close()` closes the open indexes; close the `Db`
   yourself.
 - Sub-indexes are configured, queried and read with the modality packages:
