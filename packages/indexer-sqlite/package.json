@@ -42,7 +42,8 @@
     "@statewalker/db-api": "catalog:",
     "@statewalker/db-sqlite": "catalog:",
     "@statewalker/indexer-api": "workspace:^",
-    "@statewalker/indexer-core": "workspace:^"
+    "@statewalker/indexer-core": "workspace:^",
+    "@statewalker/indexer-fulltext": "workspace:^"
   },
   "devDependencies": {
     "@statewalker/db-sqlite-do": "catalog:",
