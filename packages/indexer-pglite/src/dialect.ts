@@ -1,22 +1,5 @@
-import type { PGlite } from "@electric-sql/pglite";
-import type {
-  SqlBackedDialect,
-  SqlDb,
-  SqlFtsDialect,
-  SqlVectorDialect,
-} from "@statewalker/indexer-core";
+import type { SqlBackedDialect, SqlFtsDialect, SqlVectorDialect } from "@statewalker/indexer-core";
 import { buildPathPrefixesSql } from "@statewalker/indexer-core";
-
-/** Adapt `@electric-sql/pglite`'s `PGlite` to `@statewalker/indexer-core`'s minimal `SqlDb`. */
-export function wrapDbAsSqlDb(db: PGlite): SqlDb {
-  return {
-    exec: (sql) => db.exec(sql).then(() => undefined),
-    async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
-      const { rows } = await db.query<T>(sql, params ?? []);
-      return rows;
-    },
-  };
-}
 
 const LANGUAGE_MAP: Record<string, string> = {
   en: "english",

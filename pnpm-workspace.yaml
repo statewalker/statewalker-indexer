@@ -17,6 +17,7 @@ catalog:
   "@electric-sql/pglite-pgvector": ^0.0.9
   "@statewalker/db-api": ^0.1.0
   "@statewalker/db-duckdb-node": ^0.1.0
+  "@statewalker/db-pglite": ^0.1.0
   "@types/node": ^26.6.4
   "@uwdata/flechette": ^2.5.0
   flexsearch: ^0.8.212

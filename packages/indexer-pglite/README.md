@@ -6,7 +6,7 @@ An `Indexer` stored in [PGlite](https://github.com/electric-sql/pglite) (Postgre
 
 ## Why it exists
 
-It gives real PostgreSQL text search (stemming per language) and an approximate nearest-neighbour vector index without a server. With an IndexedDB or file `dataDir`, data persists without a separate save step.
+It gives real PostgreSQL text search (stemming per language) and an approximate nearest-neighbour vector index without a server. With an IndexedDB or file `path`, data persists without a separate save step.
 
 ## How to use
 
@@ -14,22 +14,23 @@ It gives real PostgreSQL text search (stemming per language) and an approximate 
 pnpm add @statewalker/indexer-pglite
 ```
 
-`@electric-sql/pglite` and `@electric-sql/pglite-pgvector` are dependencies of this package. Add them to your own `package.json` only if you create the `PGlite` instance yourself.
+The indexer runs over a `Db` from `@statewalker/db-pglite`. Open it with the pgvector extension — the indexer issues `CREATE EXTENSION IF NOT EXISTS vector` and fails with `extension "vector" is not available` otherwise. The indexer never closes the `Db`; close it yourself.
 
-One entry point, `@statewalker/indexer-pglite`:
-
-- `createPGLiteIndexer(options?): Promise<Indexer>` — `options.db?: PGlite`.
+- `createPGLiteIndexer({ db }): Promise<Indexer>` — `db: Db`.
 - `PGLiteIndexerOptions` — the options type.
 
 ## Examples
 
-In-memory database owned by the indexer:
+In-memory database:
 
 ```ts
+import { vector } from "@electric-sql/pglite-pgvector";
+import { newPgliteDb } from "@statewalker/db-pglite";
 import { createPGLiteIndexer } from "@statewalker/indexer-pglite";
 import { newFullTextAccess, setFullTextConfig } from "@statewalker/indexer-fulltext";
 
-const indexer = await createPGLiteIndexer();
+const db = await newPgliteDb({ extensions: { vector } });
+const indexer = await createPGLiteIndexer({ db });
 
 const params = { name: "docs" };
 setFullTextConfig(params, "q", { language: "en" });
@@ -44,17 +45,18 @@ for await (const r of index.search(request)) {
   console.log(r.path, r.blockId, fts.getResult(r)?.score); // ts_rank_cd
 }
 
-await indexer.close(); // also closes the PGlite instance it created
+await indexer.close();
+await db.close();
 ```
 
-Your own persistent database:
+Persistent database:
 
 ```ts
-import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite-pgvector";
+import { newPgliteDb } from "@statewalker/db-pglite";
 import { createPGLiteIndexer } from "@statewalker/indexer-pglite";
 
-const db = await PGlite.create({ dataDir: "idb://my-app", extensions: { vector } });
+const db = await newPgliteDb({ path: "idb://my-app", extensions: { vector } });
 const indexer = await createPGLiteIndexer({ db });
 // indexer.close() does not close db; call db.close() yourself
 ```
@@ -63,7 +65,7 @@ const indexer = await createPGLiteIndexer({ db });
 
 ### The vector extension must be loaded
 
-At startup the indexer runs `CREATE EXTENSION IF NOT EXISTS vector`. When it creates the database itself it passes `extensions: { vector }`. A `PGlite` you pass in must be created with the same extension, otherwise this statement fails and the indexer is not created.
+At startup the indexer runs `CREATE EXTENSION IF NOT EXISTS vector`. The `Db` you pass in must be opened with `extensions: { vector }`, otherwise this statement fails with `extension "vector" is not available` and the indexer is not created.
 
 ### Tables
 
@@ -85,7 +87,7 @@ idx_<index>_<sub>_vec(doc_id, block_id, embedding vector(dim))                  
 
 ### Dependencies
 
-`@electric-sql/pglite` and `@electric-sql/pglite-pgvector` (database and vector extension), `@statewalker/indexer-core` (`createSqlIndexer` and the SQL retrievers), `@statewalker/indexer-api`, `@statewalker/indexer-fulltext`, `@statewalker/indexer-vector`.
+`@statewalker/db-api` (the `Db` it runs on), `@statewalker/indexer-core` (`createSqlIndexer` and the SQL retrievers), `@statewalker/indexer-api`, `@statewalker/indexer-fulltext`, `@statewalker/indexer-vector`.
 
 ## License
 
