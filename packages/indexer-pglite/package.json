@@ -3,7 +3,7 @@
   "version": "0.2.2",
   "private": false,
   "type": "module",
-  "description": "PGlite-backed indexer implementation: full-text + vector search using in-browser Postgres.",
+  "description": "PGlite-backed indexer implementation: full-text + vector search over a @statewalker/db-api Db.",
   "bugs": {
     "url": "https://github.com/statewalker/statewalker-search/issues"
   },
@@ -41,14 +41,15 @@
     "format": "biome format --write ."
   },
   "dependencies": {
-    "@electric-sql/pglite": "catalog:",
-    "@electric-sql/pglite-pgvector": "catalog:",
+    "@statewalker/db-api": "catalog:",
     "@statewalker/indexer-api": "workspace:^",
     "@statewalker/indexer-core": "workspace:^",
     "@statewalker/indexer-fulltext": "workspace:^",
     "@statewalker/indexer-vector": "workspace:^"
   },
   "devDependencies": {
+    "@electric-sql/pglite-pgvector": "catalog:",
+    "@statewalker/db-pglite": "catalog:",
     "@statewalker/indexer-tests": "workspace:^",
     "rimraf": "catalog:",
     "tsdown": "catalog:",

@@ -12,9 +12,6 @@ catalogs:
     '@changesets/cli':
       specifier: ^3.0.3
       version: 3.0.3
-    '@electric-sql/pglite':
-      specifier: ^0.5.8
-      version: 0.5.8
     '@electric-sql/pglite-pgvector':
       specifier: ^0.0.9
       version: 0.0.9
@@ -27,6 +24,21 @@ catalogs:
     '@statewalker/db-duckdb-node':
       specifier: ^0.1.0
       version: 0.1.3
+    '@statewalker/db-pglite':
+      specifier: ^0.1.0
+      version: 0.1.0
+    '@statewalker/db-sqlite':
+      specifier: ^0.1.0
+      version: 0.1.0
+    '@statewalker/db-sqlite-do':
+      specifier: ^0.1.0
+      version: 0.1.0
+    '@statewalker/db-sqlite-index':
+      specifier: ^0.1.0
+      version: 0.1.0
+    '@statewalker/db-sqlite-node':
+      specifier: ^0.3.0
+      version: 0.3.0
     '@types/node':
       specifier: ^26.6.4
       version: 26.6.4
@@ -361,14 +373,30 @@ importers:
         specifier: 'catalog:'
         version: 5.0.3(@types/node@26.6.4)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1))
 
+  packages/indexer-ngram:
+    dependencies:
+      '@statewalker/indexer-api':
+        specifier: workspace:^
+        version: link:../indexer-api
+    devDependencies:
+      rimraf:
+        specifier: 'catalog:'
+        version: 6.1.3
+      tsdown:
+        specifier: 'catalog:'
+        version: 0.23.0(tsx@4.23.15)(typescript@7.0.2)
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.3(@types/node@26.6.4)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1))
+
   packages/indexer-pglite:
     dependencies:
-      '@electric-sql/pglite':
+      '@statewalker/db-api':
         specifier: 'catalog:'
-        version: 0.5.8
-      '@electric-sql/pglite-pgvector':
-        specifier: 'catalog:'
-        version: 0.0.9(@electric-sql/pglite@0.5.8)
+        version: 0.1.3
       '@statewalker/indexer-api':
         specifier: workspace:^
         version: link:../indexer-api
@@ -382,6 +410,12 @@ importers:
         specifier: workspace:^
         version: link:../indexer-vector
     devDependencies:
+      '@electric-sql/pglite-pgvector':
+        specifier: 'catalog:'
+        version: 0.0.9(@electric-sql/pglite@0.5.8)
+      '@statewalker/db-pglite':
+        specifier: 'catalog:'
+        version: 0.1.0
       '@statewalker/indexer-tests':
         specifier: workspace:^
         version: link:../indexer-tests
@@ -417,6 +451,55 @@ importers:
         specifier: 'catalog:'
         version: 5.0.3(@types/node@26.6.4)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1))
 
+  packages/indexer-sqlite:
+    dependencies:
+      '@statewalker/db-api':
+        specifier: 'catalog:'
+        version: 0.1.3
+      '@statewalker/db-sqlite':
+        specifier: 'catalog:'
+        version: 0.1.0
+      '@statewalker/db-sqlite-index':
+        specifier: 'catalog:'
+        version: 0.1.0
+      '@statewalker/indexer-api':
+        specifier: workspace:^
+        version: link:../indexer-api
+      '@statewalker/indexer-core':
+        specifier: workspace:^
+        version: link:../indexer-core
+      '@statewalker/indexer-fulltext':
+        specifier: workspace:^
+        version: link:../indexer-fulltext
+      '@statewalker/indexer-ngram':
+        specifier: workspace:^
+        version: link:../indexer-ngram
+      '@statewalker/indexer-vector':
+        specifier: workspace:^
+        version: link:../indexer-vector
+    devDependencies:
+      '@statewalker/db-sqlite-do':
+        specifier: 'catalog:'
+        version: 0.1.0
+      '@statewalker/db-sqlite-node':
+        specifier: 'catalog:'
+        version: 0.3.0
+      '@statewalker/indexer-tests':
+        specifier: workspace:^
+        version: link:../indexer-tests
+      rimraf:
+        specifier: 'catalog:'
+        version: 6.1.3
+      tsdown:
+        specifier: 'catalog:'
+        version: 0.23.0(tsx@4.23.15)(typescript@7.0.2)
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.3(@types/node@26.6.4)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1))
+
   packages/indexer-tests:
     dependencies:
       '@statewalker/indexer-api':
@@ -425,6 +508,9 @@ importers:
       '@statewalker/indexer-fulltext':
         specifier: workspace:^
         version: link:../indexer-fulltext
+      '@statewalker/indexer-ngram':
+        specifier: workspace:^
+        version: link:../indexer-ngram
       '@statewalker/indexer-search':
         specifier: workspace:^
         version: link:../indexer-search
@@ -938,8 +1024,28 @@ packages:
   '@statewalker/db-api@0.1.3':
     resolution: {integrity: sha512-sHWgYpMraWr5V0ee3mCT0g/aJlLGbppw7oPen9s2Gl6PV2DrEo2Xv55PQvV4UTPkS+MjQTfPfj1jjbxvEqvl5g==}
 
+  '@statewalker/db-api@0.1.4':
+    resolution: {integrity: sha512-XqyQRE1CvJ8Ijv99u0eW8l/syARfuzhL3BGIFYC1375/KlvDJx+o4D4LNnMqCh97ScU/hERQaaJ0MeXYAngmvA==}
+
   '@statewalker/db-duckdb-node@0.1.3':
     resolution: {integrity: sha512-5kgtuZT16T2V132Yoat9ZiMDLBzthZv6KcOR3l2eiTyii9ZjX/n4bbau6W+l+Mp7B7R4Ot1nYZ6wb+beF0mgtQ==}
+
+  '@statewalker/db-pglite@0.1.0':
+    resolution: {integrity: sha512-sdm+G/I/4jmso5lPFVi81G2hwgTZGKO8Vk/B+fx6bY2DBxkQoFIabmjnA19qt2qraRT4filqLvTunBPDgujiPw==}
+
+  '@statewalker/db-sqlite-do@0.1.0':
+    resolution: {integrity: sha512-vMeCkED6ezm2TQSjN3AXmM3EvwylMBrQ5Uk4MTVuvnY7ljwMQa3yzjLWRt1uBGaH8n1MTLpLMHG5Ti40paT3yQ==}
+    engines: {node: '>=22.13'}
+
+  '@statewalker/db-sqlite-index@0.1.0':
+    resolution: {integrity: sha512-NVlutEaLHpkeXIjjHCKPhnAQofm0vWjVWyjT2ujQH0jPUH9FRe0jI5LlXqmGELZrMoGGktOy/176pd6LepweQQ==}
+
+  '@statewalker/db-sqlite-node@0.3.0':
+    resolution: {integrity: sha512-hlRr2KD9nEUbuHWGUNMigmMQav87feSwUe/7VwPvSNdoRZ150UpJiAcL6ufEDX1kw/fF0J7Ivb5eeoVg1mHQhg==}
+    engines: {node: '>=22.13'}
+
+  '@statewalker/db-sqlite@0.1.0':
+    resolution: {integrity: sha512-LoVQS/KsuKwbJjXkbrYty2cuqmACFvdhmlQYtfQ8yuBiXSAX8yfKxdDWNcJYqcBJQk6Za7Mg+HU42Oh8jCL9eg==}
 
   '@turbo/darwin-64@2.11.7':
     resolution: {integrity: sha512-Z2LFOxwbiJueD1miByXJS/BrW21vv6YaQXZustty5jEX4vQYw6zyh101Sz1QO7WG0mqBzKagZ/DoAeeujI0/Sw==}
@@ -2446,10 +2552,36 @@ snapshots:
 
   '@statewalker/db-api@0.1.3': {}
 
+  '@statewalker/db-api@0.1.4': {}
+
   '@statewalker/db-duckdb-node@0.1.3':
     dependencies:
       '@duckdb/node-api': 1.5.5-r.5
       '@statewalker/db-api': 0.1.3
+
+  '@statewalker/db-pglite@0.1.0':
+    dependencies:
+      '@electric-sql/pglite': 0.5.8
+      '@statewalker/db-api': 0.1.4
+
+  '@statewalker/db-sqlite-do@0.1.0':
+    dependencies:
+      '@statewalker/db-api': 0.1.4
+      '@statewalker/db-sqlite': 0.1.0
+
+  '@statewalker/db-sqlite-index@0.1.0':
+    dependencies:
+      '@statewalker/db-api': 0.1.4
+      '@statewalker/db-sqlite': 0.1.0
+
+  '@statewalker/db-sqlite-node@0.3.0':
+    dependencies:
+      '@statewalker/db-api': 0.1.4
+      '@statewalker/db-sqlite': 0.1.0
+
+  '@statewalker/db-sqlite@0.1.0':
+    dependencies:
+      '@statewalker/db-api': 0.1.4
 
   '@turbo/darwin-64@2.11.7':
     optional: true

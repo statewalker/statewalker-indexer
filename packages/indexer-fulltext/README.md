@@ -56,9 +56,9 @@ export const myProvider: FullTextProvider = {
 ## Internals
 
 - `setFullTextConfig` writes `params.subIndexes[name] = { type: "fulltext", ...config }`. The indexer finds the provider by that `type`. `getFullTextConfig` returns `undefined` when the entry is missing or has another type.
-- `FulltextQuery` is `{ queries: string[], topK?, paths? }`. How several `queries` combine depends on the backend: the in-memory FlexSearch and MiniSearch indexes add up per-query scores (blocks matching more queries rank higher); DuckDB and PGlite keep each block's best score. `topK` and `paths` here are what the sub-index uses; the top-level request values are not forwarded to it.
-- `FulltextResult` is `{ path, blockId, score, snippet }`; `score` is the engine's native score (BM25 in DuckDB, `ts_rank_cd` in PGlite).
-- `language` handling is backend-specific: DuckDB and PGlite map ISO-639-1 codes (`"en"`, `"fr"`, ...) to stemmers / text-search configs; the in-memory FlexSearch and MiniSearch indexes only store it.
+- `FulltextQuery` is `{ queries: string[], topK?, paths? }`. How several `queries` combine depends on the backend: the in-memory FlexSearch and MiniSearch indexes and SQLite add up per-query scores (blocks matching more queries rank higher); DuckDB and PGlite keep each block's best score. `topK` and `paths` here are what the sub-index uses; the top-level request values are not forwarded to it.
+- `FulltextResult` is `{ path, blockId, score, snippet }`; `score` is the engine's native score (BM25 in DuckDB, `ts_rank_cd` in PGlite, `-bm25(...)` in SQLite FTS5).
+- `language` handling is backend-specific: DuckDB and PGlite map ISO-639-1 codes (`"en"`, `"fr"`, ...) to stemmers / text-search configs; SQLite applies the Porter stemmer for exactly `"en"` and no stemming for any other value; the in-memory FlexSearch and MiniSearch indexes only store it.
 - `get(index)` throws `No sub-index named "<name>" is registered on index "<index>"`. It does not check the binding's type.
 - Dependencies: `@statewalker/indexer-api` only.
 

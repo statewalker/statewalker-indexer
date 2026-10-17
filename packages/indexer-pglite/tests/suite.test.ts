@@ -10,8 +10,9 @@
 // indirectly through the Indexer-driven suites above.
 // =============================================================================
 
-import { PGlite } from "@electric-sql/pglite";
 import { vector } from "@electric-sql/pglite-pgvector";
+import type { Db } from "@statewalker/db-api";
+import { newPgliteDb } from "@statewalker/db-pglite";
 import type { DocumentPath, Index } from "@statewalker/indexer-api";
 import { sanitizePrefix } from "@statewalker/indexer-core";
 import type { FulltextQuery } from "@statewalker/indexer-fulltext";
@@ -27,8 +28,18 @@ import { newVectorAccess } from "@statewalker/indexer-vector";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createPGLiteIndexer } from "../src/pglite-indexer.js";
 
+const openDbs: Db[] = [];
+async function newDb(): Promise<Db> {
+  const db = await newPgliteDb({ extensions: { vector } });
+  openDbs.push(db);
+  return db;
+}
+
 const factory = {
-  create: () => createPGLiteIndexer(),
+  create: async () => createPGLiteIndexer({ db: await newDb() }),
+  cleanup: async () => {
+    for (const db of openDbs.splice(0)) await db.close();
+  },
 };
 
 const ftConfig = { type: "fulltext" as const, language: "en" };
@@ -91,11 +102,11 @@ runMultiInstanceConformanceSuite("PGLite Indexer", {
 // =============================================================================
 
 describe("PGLite Indexer — docs-table reclamation", () => {
-  let db: PGlite;
+  let db: Db;
   let indexer: Awaited<ReturnType<typeof createPGLiteIndexer>>;
 
   beforeEach(async () => {
-    db = await PGlite.create({ extensions: { vector } });
+    db = await newPgliteDb({ extensions: { vector } });
     indexer = await createPGLiteIndexer({ db });
   });
 
@@ -105,11 +116,12 @@ describe("PGLite Indexer — docs-table reclamation", () => {
     } catch {
       /* may already be closed by the test */
     }
+    await db.close();
   });
 
   async function countDocsRows(indexName: string): Promise<number> {
     const prefix = sanitizePrefix(indexName);
-    const { rows } = await db.query<{ cnt: number | bigint }>(
+    const rows = await db.query<{ cnt: number | bigint }>(
       `SELECT COUNT(*)::int AS cnt FROM idx_${prefix}_docs`,
     );
     return Number(rows[0]?.cnt ?? 0);
@@ -155,7 +167,7 @@ describe("PGLite Indexer — docs-table reclamation", () => {
 
 describe("PGLite Indexer — manifest survival across reopen", () => {
   it("createIndex + close + reopen via new Indexer instance preserves index list", async () => {
-    const db = await PGlite.create({ extensions: { vector } });
+    const db = await newPgliteDb({ extensions: { vector } });
     try {
       const indexer1 = await createPGLiteIndexer({ db });
       await indexer1.createIndex({ name: "persist", subIndexes: { q: ftConfig } });
@@ -182,9 +194,23 @@ describe("PGLite Indexer — manifest survival across reopen", () => {
   });
 });
 
+describe("PGLite Indexer — caller owns the Db", () => {
+  it("indexer.close() leaves the caller's Db open", async () => {
+    const db = await newPgliteDb({ extensions: { vector } });
+    try {
+      const indexer = await createPGLiteIndexer({ db });
+      await indexer.close();
+      const rows = await db.query<{ one: number }>("SELECT 1 AS one");
+      expect(rows[0]?.one).toBe(1);
+    } finally {
+      await db.close();
+    }
+  });
+});
+
 describe("PGLite Indexer — concurrent createIndex overwrites are serialised", () => {
   it("Promise.all([createIndex(overwrite), createIndex(overwrite)]) leaves exactly one manifest row", async () => {
-    const db = await PGlite.create({ extensions: { vector } });
+    const db = await newPgliteDb({ extensions: { vector } });
     const indexer = await createPGLiteIndexer({ db });
     try {
       await indexer.createIndex({ name: "race", subIndexes: { q: ftConfig } });
@@ -194,7 +220,7 @@ describe("PGLite Indexer — concurrent createIndex overwrites are serialised", 
         indexer.createIndex({ name: "race", subIndexes: { q: ftConfig }, overwrite: true }),
       ]);
 
-      const { rows } = await db.query<{ cnt: number | bigint }>(
+      const rows = await db.query<{ cnt: number | bigint }>(
         "SELECT COUNT(*)::int AS cnt FROM __indexer_manifest WHERE name = $1",
         ["race"],
       );

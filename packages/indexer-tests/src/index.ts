@@ -25,6 +25,9 @@ export type {
 } from "./conformance/multi-instance.suite.js";
 export { runMultiInstanceConformanceSuite } from "./conformance/multi-instance.suite.js";
 
+export type { NgramSuiteOptions } from "./conformance/ngram.suite.js";
+export { runNgramConformanceSuite } from "./conformance/ngram.suite.js";
+
 export type { RrfSuiteOptions } from "./conformance/rrf-blending.suite.js";
 export { runRrfBlendingSuite } from "./conformance/rrf-blending.suite.js";
 
