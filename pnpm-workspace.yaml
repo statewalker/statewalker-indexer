@@ -18,6 +18,10 @@ catalog:
   "@statewalker/db-api": ^0.1.0
   "@statewalker/db-duckdb-node": ^0.1.0
   "@statewalker/db-pglite": ^0.1.0
+  "@statewalker/db-sqlite": ^0.1.0
+  "@statewalker/db-sqlite-do": ^0.1.0
+  "@statewalker/db-sqlite-index": ^0.1.0
+  "@statewalker/db-sqlite-node": ^0.3.0
   "@types/node": ^26.6.4
   "@uwdata/flechette": ^2.5.0
   flexsearch: ^0.8.212
