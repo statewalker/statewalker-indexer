@@ -14,7 +14,7 @@ catalog:
   "@changesets/cli": ^3.0.3
   "@electric-sql/pglite": ^0.5.8
   # pgvector left the pglite package in 0.5 (was @electric-sql/pglite/vector)
-  "@electric-sql/pglite-pgvector": ^0.0.9
+  "@electric-sql/pglite-pgvector": ^0.0.12
   "@statewalker/db-api": ^0.1.0
   "@statewalker/db-duckdb-node": ^0.1.0
   "@statewalker/db-pglite": ^0.1.0
